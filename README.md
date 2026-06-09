@@ -10,7 +10,7 @@ especially integer floors, Game Freak rounding, and modifier chaining.
 
 ## Status
 
-Estimated Champions parity: **about 83%** against the JavaScript calculator's
+Estimated Champions parity: **about 89%** against the JavaScript calculator's
 Champions-relevant behavior.
 
 The core damage path is in good shape: stat calculation, type effectiveness,
@@ -101,12 +101,15 @@ Implemented and covered by tests:
   Weakness Policy
 - fixed and HP-dependent damage moves such as Super Fang, Endeavor, Final
   Gambit, Seismic Toss, and OHKO moves
+- counter-style damage moves (`Counter`, `Mirror Coat`, `Metal Burst`, and
+  `Comeuppance`) when the caller supplies the countered damage rolls/category
 - multi-hit totals and per-hit rolls, including Triple Kick/Triple Axel hit
   power, Parental Bond second-hit reduction, and Stamina/Weak Armor between-hit
   recalculation
 - multi-hit first-hit consumables/effects for resist berries, Kee Berry,
   Maranga Berry, Multiscale, Shadow Shield, Gooey, Tangling Hair, Cotton Down,
-  Spicy Spray, Defiant/Competitive follow-up boosts, and burn-heal berries
+  Spicy Spray, Sand Spit weather activation, Defiant/Competitive follow-up
+  boosts, and burn-heal berries
 - Ruin field modifiers
 - priority-blocking abilities and Psychic Terrain priority prevention
 - Champions type-effectiveness overrides for Thousand Arrows, Stellar vs Tera,
@@ -114,6 +117,8 @@ Implemented and covered by tests:
 - final speed modifiers for speed-based moves and Analytic ordering
 - special stat-source moves such as Foul Play, Body Press, and Psyshock-style
   physical-defense special moves
+- Champions ability branches for Plus, Minus, Ripen-enhanced berries, and
+  Disguise direct-damage replacement
 - JS custom modifier hooks for BP/Attack/Defense/Final modifiers
 - Protect quartering only for JS-qualified move/ability paths
 - Sun/Rain damage modifiers
@@ -129,13 +134,12 @@ tests live in `tests/fixtures.rs`.
 This is not yet a full port of every Champions-relevant browser calculator
 branch. The biggest remaining gaps are:
 
-- Counter-style moves: `Counter`, `Mirror Coat`, `Metal Burst`, and
-  `Comeuppance`. The JS calculator models these by referencing a previous or
-  countered move result; the Rust API still needs an explicit input model for
-  that.
-- Ability branches present in Champions data but not fully modeled yet, notably
-  `Magic Guard`, `Disguise`, `Ripen`, `Sand Spit`, `Plus`, and `Minus`.
-  `Sand Spit` is also marked unimplemented in the JS multi-hit follow-up path.
+- Battle-state effects outside direct damage, such as Magic Guard preventing
+  indirect damage/recoil. These need a battle-event model rather than a single
+  damage calculation.
+- Counter-style moves require callers to provide the previous/countered damage
+  rolls and category on `Move`; the library does not infer them from a turn
+  history.
 - Full Neutralizing Gas / Trace exception parity for every unsuppressible or
   uncopyable ability in the JS lists.
 - Remaining browser/UI-only setup toggles that are not yet represented as typed

@@ -95,6 +95,7 @@ fn calculate_champions_damage(mut input: CalcInput) -> Result<DamageResult, Calc
     let mut debug = vec![format!("hits={hit_count}")];
     let mut attacker = input.attacker;
     let mut defender = input.defender;
+    let mut field = input.field;
 
     for hit_index in 0..hit_count {
         let mut hit_move = input.move_.clone();
@@ -110,7 +111,7 @@ fn calculate_champions_damage(mut input: CalcInput) -> Result<DamageResult, Calc
                 attacker: hit_attacker,
                 defender: defender.clone(),
                 move_: hit_move,
-                field: input.field,
+                field,
                 ruleset: input.ruleset,
             },
             Vec::new(),
@@ -124,7 +125,7 @@ fn calculate_champions_damage(mut input: CalcInput) -> Result<DamageResult, Calc
                 &mut attacker,
                 &mut defender,
                 &input.move_,
-                &input.field,
+                &mut field,
                 &hit_result.applied_modifiers,
             );
         }
@@ -266,6 +267,17 @@ fn calculate_champions_single_hit(
         &mut modifiers,
     ) {
         return Ok(zero_damage(defender_max_hp, modifiers, debug));
+    }
+
+    if def_ability == Ability::Disguise && defender.ability_on {
+        modifiers.push(ModifierBreakdown::new("Disguise", 0));
+        return Ok(single_damage_result(
+            (defender_max_hp / 8).max(1),
+            defender_max_hp,
+            defender_current_hp,
+            modifiers,
+            debug,
+        ));
     }
 
     if let Some(result) = set_damage_result(
@@ -523,7 +535,7 @@ fn apply_between_hit_effects(
     attacker: &mut Pokemon,
     defender: &mut Pokemon,
     move_: &Move,
-    field: &Field,
+    field: &mut Field,
     hit_modifiers: &[ModifierBreakdown],
 ) {
     if hit_modifiers
@@ -572,6 +584,9 @@ fn apply_between_hit_effects(
         } else {
             attacker.status = StatusCondition::Burned;
         }
+    }
+    if defender.ability == Ability::SandSpit && field.weather != Weather::Sand {
+        field.weather = Weather::Sand;
     }
 }
 
@@ -1376,6 +1391,15 @@ fn set_damage_result(
     modifiers: Vec<ModifierBreakdown>,
     debug: Vec<String>,
 ) -> Option<DamageResult> {
+    if let Some(result) = counter_damage_result(
+        move_,
+        defender_max_hp,
+        defender_current_hp,
+        modifiers.clone(),
+        debug.clone(),
+    ) {
+        return Some(result);
+    }
     let damage = match move_.name.as_str() {
         "Super Fang" | "Nature's Madness" | "Ruination" => defender_current_hp / 2,
         "Guardian of Alola" => {
@@ -1406,6 +1430,68 @@ fn set_damage_result(
         modifiers,
         debug,
     ))
+}
+
+fn counter_damage_result(
+    move_: &Move,
+    defender_max_hp: u16,
+    defender_current_hp: u16,
+    mut modifiers: Vec<ModifierBreakdown>,
+    debug: Vec<String>,
+) -> Option<DamageResult> {
+    let rolls = move_.countered_damage_rolls.as_ref()?;
+    let category = move_.countered_move_category?;
+    let multiplier = match move_.name.as_str() {
+        "Counter" if category == Category::Physical => 2.0,
+        "Mirror Coat" if category == Category::Special => 2.0,
+        "Metal Burst" | "Comeuppance" if category != Category::Status => 1.5,
+        "Counter" | "Mirror Coat" | "Metal Burst" | "Comeuppance" => 0.0,
+        _ => return None,
+    };
+    if multiplier == 0.0 {
+        return Some(single_damage_result(
+            0,
+            defender_max_hp,
+            defender_current_hp,
+            modifiers,
+            debug,
+        ));
+    }
+    let mut damage_rolls = rolls
+        .iter()
+        .map(|roll| {
+            if multiplier == 2.0 {
+                roll.saturating_mul(2)
+            } else {
+                ((*roll as u32 * 3) / 2).min(u16::MAX as u32) as u16
+            }
+        })
+        .collect::<Vec<_>>();
+    damage_rolls.sort_unstable();
+    let min_damage = *damage_rolls.first().unwrap_or(&0);
+    let max_damage = *damage_rolls.last().unwrap_or(&0);
+    let percent_range = (
+        min_damage as f32 * 100.0 / defender_max_hp as f32,
+        max_damage as f32 * 100.0 / defender_max_hp as f32,
+    );
+    let ko_chance = Some(
+        damage_rolls
+            .iter()
+            .filter(|&&damage| damage >= defender_current_hp)
+            .count() as f32
+            / damage_rolls.len() as f32,
+    );
+    modifiers.push(ModifierBreakdown::new("counter-style damage", 0));
+    Some(DamageResult {
+        min_damage,
+        max_damage,
+        hit_rolls: vec![damage_rolls.clone()],
+        damage_rolls,
+        percent_range,
+        ko_chance,
+        applied_modifiers: modifiers,
+        debug,
+    })
 }
 
 fn single_damage_result(
@@ -1902,6 +1988,7 @@ fn calc_attack_mods(
             && attacker.ability_on
             && move_.type_ == PokemonType::Fire)
         || (attacker.ability == Ability::Steelworker && move_.type_ == PokemonType::Steel)
+        || (matches!(attacker.ability, Ability::Plus | Ability::Minus) && attacker.ability_on)
         || (attacker.ability == Ability::Sharpness && move_.is_slice)
         || (attacker.ability == Ability::RockyPayload && move_.type_ == PokemonType::Rock)
     {
@@ -2182,7 +2269,12 @@ fn calc_final_mods(
         && (type_effectiveness > 1.0 || move_.type_ == PokemonType::Normal)
         && !matches!(attacker.ability, Ability::Unnerve | Ability::AsOne)
     {
-        push_mod(&mut mods, modifiers, "resist berry", MOD_HALF);
+        let modifier = if def_ability == Ability::Ripen {
+            MODIFIER_DENOMINATOR / 4
+        } else {
+            MOD_HALF
+        };
+        push_mod(&mut mods, modifiers, "resist berry", modifier);
     }
     for &modifier in &attacker.custom_final_mods {
         push_mod(&mut mods, modifiers, "custom final modifier", modifier);

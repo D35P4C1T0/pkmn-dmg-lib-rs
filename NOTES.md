@@ -17,17 +17,18 @@ mechanic needs unported reference data, the library returns
 
 ## Unsupported Or Partial Mechanics
 
-- Champions-only parity is estimated at roughly 83% against the JS calculator.
+- Champions-only parity is estimated at roughly 89% against the JS calculator.
   The core damage path is fixture-covered; remaining work is mostly input
   modeling and targeted JS-only metadata.
 - counter-style moves (`Counter`, `Mirror Coat`, `Metal Burst`, `Comeuppance`)
-  need an explicit Rust input model for the previous/countered move result
+  are implemented when callers supply previous/countered damage rolls and move
+  category; the crate does not infer that battle history
 - remaining JS-only calculator metadata not covered by `champout`, such as
   move/item/ability flags, aliases, and hardcoded edge-case branches
 - dynamic setdex imports
 - species-locked item tables and complete Mega/Z/Primal item restrictions
-- ability branches present in Champions data but not fully modeled yet, notably
-  `Magic Guard`, `Disguise`, `Ripen`, `Sand Spit`, `Plus`, and `Minus`
+- battle-state effects outside direct damage, notably Magic Guard preventing
+  indirect damage/recoil
 - remaining Neutralizing Gas / Trace exception parity for every JS
   unsuppressible or uncopyable ability
 - remaining team-entry preprocessing from `CALCULATE_ALL_MOVES_SV` for any

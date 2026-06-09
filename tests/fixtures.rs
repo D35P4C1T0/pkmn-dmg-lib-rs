@@ -422,6 +422,47 @@ fn fixed_and_hp_dependent_damage_moves_match_champions_formulas() {
 }
 
 #[test]
+fn counter_style_moves_use_supplied_countered_damage_like_js() {
+    let attacker = stat_100_mon("Counter User", PokemonType::Fighting);
+    let defender = stat_100_mon("Target", PokemonType::Normal);
+    let mut counter = Move::new("Counter", 1, PokemonType::Fighting, Category::Physical);
+    counter.countered_damage_rolls = Some(vec![10, 12, 13]);
+    counter.countered_move_category = Some(Category::Physical);
+    assert_eq!(
+        calc(
+            attacker.clone(),
+            defender.clone(),
+            counter,
+            Field::default()
+        )
+        .damage_rolls,
+        vec![20, 24, 26]
+    );
+
+    let mut mirror_coat = Move::new("Mirror Coat", 1, PokemonType::Psychic, Category::Special);
+    mirror_coat.countered_damage_rolls = Some(vec![10, 12, 13]);
+    mirror_coat.countered_move_category = Some(Category::Physical);
+    assert_eq!(
+        calc(
+            attacker.clone(),
+            defender.clone(),
+            mirror_coat,
+            Field::default()
+        )
+        .damage_rolls,
+        vec![0]
+    );
+
+    let mut metal_burst = Move::new("Metal Burst", 1, PokemonType::Steel, Category::Physical);
+    metal_burst.countered_damage_rolls = Some(vec![10, 12, 13]);
+    metal_burst.countered_move_category = Some(Category::Special);
+    assert_eq!(
+        calc(attacker, defender, metal_burst, Field::default()).damage_rolls,
+        vec![15, 18, 19]
+    );
+}
+
+#[test]
 fn type_changing_ability_changes_type_and_applies_bp_boost() {
     let mut attacker = stat_100_mon("Attacker", PokemonType::Fairy);
     attacker.ability = Ability::Pixilate;
@@ -440,6 +481,61 @@ fn type_changing_ability_changes_type_and_applies_bp_boost() {
         .applied_modifiers
         .iter()
         .any(|modifier| modifier.label == "type-changing ability boost"));
+}
+
+#[test]
+fn remaining_champions_abilities_plus_minus_ripen_disguise_and_sand_spit_match_js() {
+    let mut plus = stat_100_mon("Plus", PokemonType::Electric);
+    plus.ability = Ability::Plus;
+    plus.ability_on = true;
+    let defender = stat_100_mon("Defender", PokemonType::Water);
+    let thunderbolt = Move::new("Thunderbolt", 90, PokemonType::Electric, Category::Special);
+    let result = calc(plus, defender.clone(), thunderbolt, Field::default());
+    assert_eq!(
+        result.damage_rolls,
+        vec![152, 156, 158, 158, 162, 162, 164, 168, 168, 170, 170, 174, 176, 176, 180, 182]
+    );
+
+    let attacker = stat_100_mon("Attacker", PokemonType::Fire);
+    let mut ripen_defender = stat_100_mon("Ripen", PokemonType::Grass);
+    ripen_defender.ability = Ability::Ripen;
+    ripen_defender.item = Item::OccaBerry;
+    let flamethrower = Move::new("Flamethrower", 90, PokemonType::Fire, Category::Special);
+    let result = calc(
+        attacker.clone(),
+        ripen_defender,
+        flamethrower.clone(),
+        Field::default(),
+    );
+    assert_eq!(
+        result.damage_rolls,
+        vec![25, 26, 26, 27, 27, 27, 27, 27, 28, 28, 28, 29, 29, 30, 30, 30]
+    );
+
+    let mut disguised = stat_100_mon("Mimikyu", PokemonType::Ghost);
+    disguised.ability = Ability::Disguise;
+    disguised.ability_on = true;
+    let result = calc(
+        attacker.clone(),
+        disguised,
+        flamethrower.clone(),
+        Field::default(),
+    );
+    assert_eq!(result.damage_rolls, vec![21]);
+
+    let mut sand_spit = stat_100_mon("Sand Spit", PokemonType::Normal);
+    sand_spit.ability = Ability::SandSpit;
+    let mut weather_ball = Move::new("Weather Ball", 50, PokemonType::Normal, Category::Special);
+    weather_ball.hits = 2;
+    let result = calc(attacker, sand_spit, weather_ball, Field::default());
+    assert_eq!(
+        result.hit_rolls[0],
+        vec![20, 20, 20, 21, 21, 21, 21, 22, 22, 22, 22, 23, 23, 23, 23, 24]
+    );
+    assert_eq!(
+        result.hit_rolls[1],
+        vec![39, 39, 40, 40, 40, 41, 41, 42, 42, 43, 43, 44, 44, 45, 45, 46]
+    );
 }
 
 #[test]
