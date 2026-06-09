@@ -1,0 +1,3 @@
+[submodule "reference/NCP-VGC-Damage-Calculator"]
+	path = reference/NCP-VGC-Damage-Calculator
+	url = https://github.com/nerd-of-now/NCP-VGC-Damage-Calculator.git
