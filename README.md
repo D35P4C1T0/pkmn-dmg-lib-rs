@@ -154,10 +154,20 @@ branch. The biggest remaining gaps are:
   typed Rust structs directly.
 - Optimizer search and spread ranking beyond module placeholders.
 
-Raw JS reference files remain vendored under `reference/` for behavior audits,
-but the library should prefer `champout` plus targeted JS-only metadata rather
-than a full raw import of `pokedex.js`, `move_data.js`, `item_data.js`, and
+Local JS reference checkouts may live under `reference/` for behavior audits,
+but that folder is ignored and intentionally not published in this repository.
+The library should prefer `champout` plus targeted JS-only metadata rather than
+a full raw import of `pokedex.js`, `move_data.js`, `item_data.js`, and
 `ability_data.js`.
+
+## Thanks To
+
+- Nimbasa City Post / `NCP-VGC-Damage-Calculator`, whose JavaScript calculator
+  is the behavior reference for this Rust port.
+- Project Pokemon / `champout`, for the Pokemon Champions static data dumps
+  used to generate and validate the vendored Champions data.
+- Pokemon Showdown and the `@pkmn` ecosystem, for normalized Pokemon data and
+  mechanics references used to cross-check ambiguous cases.
 
 ## Repository
 
