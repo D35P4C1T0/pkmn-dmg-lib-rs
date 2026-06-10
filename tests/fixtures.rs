@@ -1864,6 +1864,39 @@ fn public_champions_lists_match_vendored_json_sources() {
     );
 }
 
+#[test]
+fn duplicate_monotype_entries_are_treated_as_single_type() {
+    let mut kingambit = Pokemon::champions(
+        "Kingambit",
+        [Some(PokemonType::Dark), Some(PokemonType::Steel)],
+        StatTable::new(100, 135, 120, 60, 85, 50),
+        StatTable::new(0, 32, 0, 0, 0, 0),
+        Nature::Adamant,
+    );
+    kingambit.ability = Ability::Defiant;
+    kingambit.weight_kg = 120.0;
+
+    let mut floette = Pokemon::champions(
+        "Mega Floette",
+        [Some(PokemonType::Fairy), Some(PokemonType::Fairy)],
+        StatTable::new(74, 85, 87, 155, 148, 102),
+        StatTable::new(32, 0, 32, 0, 0, 0),
+        Nature::Hardy,
+    );
+    floette.weight_kg = 100.8;
+
+    let result = calc(
+        kingambit,
+        floette,
+        Move::new("Iron Head", 80, PokemonType::Steel, Category::Physical),
+        Field::default(),
+    );
+    assert_eq!(
+        result.damage_rolls,
+        vec![134, 134, 138, 138, 140, 140, 144, 144, 146, 146, 150, 150, 152, 152, 156, 158]
+    );
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     use std::process::{Command, Stdio};
 

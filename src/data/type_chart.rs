@@ -116,7 +116,12 @@ pub fn move_effectiveness(
     strong_winds: bool,
 ) -> f32 {
     let mut total = 1.0;
+    let mut seen_types = Vec::new();
     for defend_type in defender_types.into_iter().flatten() {
+        if seen_types.contains(&defend_type) {
+            continue;
+        }
+        seen_types.push(defend_type);
         let single = if (foresight || scrappy)
             && defend_type == PokemonType::Ghost
             && matches!(move_type, PokemonType::Normal | PokemonType::Fighting)
