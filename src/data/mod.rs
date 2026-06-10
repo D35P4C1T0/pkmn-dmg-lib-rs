@@ -1,4 +1,5 @@
 pub mod abilities;
+pub mod champions;
 pub mod items;
 pub mod moves;
 pub mod pokemon;

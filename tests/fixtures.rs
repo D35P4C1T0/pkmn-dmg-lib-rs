@@ -1812,6 +1812,58 @@ fn normalized_champions_data_covers_regulation_m_a_roster_names() {
     assert!(missing.is_empty(), "missing roster names: {missing:?}");
 }
 
+#[test]
+fn public_champions_lists_match_vendored_json_sources() {
+    let items: Vec<String> =
+        serde_json::from_str(damage_calc::data::champions::CHAMPIONS_ITEMS_JSON)
+            .expect("items JSON");
+    let roster: Vec<String> =
+        serde_json::from_str(damage_calc::data::champions::REGULATION_M_A_POKEMON_JSON)
+            .expect("roster JSON");
+    let data: serde_json::Value =
+        serde_json::from_str(damage_calc::data::CHAMPIONS_DATA_JSON).expect("generated data JSON");
+
+    assert_eq!(
+        damage_calc::data::champions::CHAMPIONS_ITEMS.len(),
+        items.len()
+    );
+    assert_eq!(
+        damage_calc::data::champions::REGULATION_M_A_POKEMON.len(),
+        roster.len()
+    );
+    assert_eq!(
+        damage_calc::data::champions::CHAMPIONS_SPECIES.len(),
+        data["counts"]["species"].as_u64().expect("species count") as usize
+    );
+    assert_eq!(
+        damage_calc::data::champions::CHAMPIONS_ABILITIES.len(),
+        data["counts"]["abilities"]
+            .as_u64()
+            .expect("abilities count") as usize
+    );
+
+    assert_eq!(
+        damage_calc::data::champions::champions_item("Light Ball"),
+        Some("Light Ball")
+    );
+    assert_eq!(
+        damage_calc::data::champions::regulation_m_a_pokemon("Hydrapple"),
+        Some("Hydrapple")
+    );
+    assert_eq!(
+        damage_calc::data::champions::champions_species("Mega Venusaur")
+            .expect("Mega Venusaur")
+            .id,
+        "0003001"
+    );
+    assert_eq!(
+        damage_calc::data::champions::champions_ability("Overgrow")
+            .expect("Overgrow")
+            .id,
+        65
+    );
+}
+
 fn sha256_hex(bytes: &[u8]) -> String {
     use std::process::{Command, Stdio};
 

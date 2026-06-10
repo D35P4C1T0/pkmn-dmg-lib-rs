@@ -59,6 +59,33 @@ assert_eq!(result.hit_rolls.len(), 1);
 # Ok::<(), damage_calc::CalcError>(())
 ```
 
+## Champions Data API
+
+The crate vendors pinned Champions data so downstream tools do not need to
+fetch Pokemon, item, or ability lists.
+
+```rust
+use damage_calc::data::champions::{
+    champions_ability, champions_item, regulation_m_a_pokemon, CHAMPIONS_ABILITIES,
+    CHAMPIONS_ITEMS, CHAMPIONS_SPECIES, REGULATION_M_A_POKEMON,
+};
+
+assert!(CHAMPIONS_ITEMS.contains(&"Light Ball"));
+assert!(REGULATION_M_A_POKEMON.contains(&"Hydrapple"));
+assert_eq!(champions_item("Scope Lens"), Some("Scope Lens"));
+assert_eq!(regulation_m_a_pokemon("Venusaur"), Some("Venusaur"));
+assert_eq!(champions_ability("Overgrow").unwrap().id, 65);
+
+// Lightweight full lists for menus and optimizer setup.
+let item_count = CHAMPIONS_ITEMS.len();
+let ability_count = CHAMPIONS_ABILITIES.len();
+let species_form_count = CHAMPIONS_SPECIES.len();
+```
+
+For richer imports, `damage_calc::data::CHAMPIONS_DATA_JSON` still exposes the
+full normalized JSON with species/forms, base stats, legal moves, moves, and
+ability descriptions.
+
 ## Current Parity Coverage
 
 Implemented and covered by tests:
@@ -75,6 +102,9 @@ Implemented and covered by tests:
   learnsets, and English text, with a source manifest and SHA-256 validation
 - normalized `champions-data.json` generated from `champout`, exposed as
   `damage_calc::data::CHAMPIONS_DATA_JSON`
+- public zero-fetch list constants in `damage_calc::data::champions` for
+  Champions items, Regulation M-A Pokemon, Pokemon/form summaries, and
+  abilities
 - Light Ball, Shell Bell/Fling power, and Champions Mega-stone Fling/Knock Off
   restrictions
 - common offensive and defensive ability modifiers
@@ -149,9 +179,9 @@ branch. The biggest remaining gaps are:
 - Z-Move, Max Move, Dynamax, and Legends Z-A cooldown/plus-move branches. These
   exist in the shared JS files but are outside the first-pass Champions library
   scope unless Champions formats require them.
-- A fully normalized high-level data API over `champions-data.json`. The raw
-  generated JSON is vendored and exposed today, while callers still construct
-  typed Rust structs directly.
+- High-level constructors from normalized Champions data into calculator
+  `Pokemon` and `Move` structs. The pinned lists and full JSON are exposed, but
+  callers still assemble battle-ready typed inputs directly.
 - Optimizer search and spread ranking beyond module placeholders.
 
 Local JS reference checkouts may live under `reference/` for behavior audits,
