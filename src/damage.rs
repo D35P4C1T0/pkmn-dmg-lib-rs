@@ -190,6 +190,7 @@ fn calculate_champions_single_hit(
         }
     }
 
+    apply_move_metadata_defaults(&mut move_);
     apply_move_type_changes(&mut move_, &attacker, &field);
     let ate_ize_boosted = apply_ability_type_change(&mut move_, &attacker, &mut modifiers);
 
@@ -1171,6 +1172,50 @@ fn apply_move_type_changes(move_: &mut Move, attacker: &Pokemon, field: &Field) 
         }
         _ => {}
     }
+}
+
+fn apply_move_metadata_defaults(move_: &mut Move) {
+    if is_champions_spread_move(&move_.name) {
+        move_.is_spread = true;
+    }
+}
+
+fn is_champions_spread_move(name: &str) -> bool {
+    matches!(
+        name,
+        "Surf"
+            | "Earthquake"
+            | "Self-Destruct"
+            | "Explosion"
+            | "Discharge"
+            | "Lava Plume"
+            | "Sludge Wave"
+            | "Bulldoze"
+            | "Parabolic Charge"
+            | "Petal Blizzard"
+            | "Boomburst"
+            | "Sparkling Aria"
+            | "Brutal Swing"
+            | "Misty Explosion"
+            | "Blizzard"
+            | "Rock Slide"
+            | "Icy Wind"
+            | "Heat Wave"
+            | "Eruption"
+            | "Hyper Voice"
+            | "Air Cutter"
+            | "Water Spout"
+            | "Muddy Water"
+            | "Struggle Bug"
+            | "Electroweb"
+            | "Snarl"
+            | "Dazzling Gleam"
+            | "Clanging Scales"
+            | "Breaking Swipe"
+            | "Burning Jealousy"
+            | "Mortal Spin"
+            | "Matcha Gotcha"
+    )
 }
 
 fn apply_ability_type_change(

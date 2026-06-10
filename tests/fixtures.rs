@@ -557,6 +557,40 @@ fn ruin_field_modifiers_apply_at_the_correct_stage() {
 }
 
 #[test]
+fn named_spread_moves_apply_doubles_spread_modifier_without_manual_flag() {
+    let attacker = stat_100_mon("Attacker", PokemonType::Normal);
+    let defender = stat_100_mon("Defender", PokemonType::Normal);
+    let rock_slide = Move::new("Rock Slide", 75, PokemonType::Rock, Category::Physical);
+
+    let mut singles = Field::default();
+    singles.format = Format::Singles;
+    let singles_result = calc(
+        attacker.clone(),
+        defender.clone(),
+        rock_slide.clone(),
+        singles,
+    );
+    assert_eq!(
+        singles_result.damage_rolls,
+        vec![29, 30, 30, 30, 31, 31, 31, 32, 32, 32, 33, 33, 33, 34, 34, 35]
+    );
+    assert!(!singles_result
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "spread"));
+
+    let doubles_result = calc(attacker, defender, rock_slide, Field::default());
+    assert_eq!(
+        doubles_result.damage_rolls,
+        vec![22, 22, 22, 22, 23, 23, 23, 23, 24, 24, 24, 24, 25, 25, 25, 26]
+    );
+    assert!(doubles_result
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "spread" && modifier.modifier == 0x0C00));
+}
+
+#[test]
 fn priority_blocking_abilities_and_psychic_terrain_prevent_damage() {
     let attacker = stat_100_mon("Attacker", PokemonType::Normal);
     let mut defender = stat_100_mon("Defender", PokemonType::Psychic);
