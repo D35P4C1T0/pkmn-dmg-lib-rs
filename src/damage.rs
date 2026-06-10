@@ -63,6 +63,7 @@ pub fn calculate_damage(input: CalcInput) -> Result<DamageResult, CalcError> {
 }
 
 fn calculate_champions_damage(mut input: CalcInput) -> Result<DamageResult, CalcError> {
+    apply_move_metadata_defaults(&mut input.move_);
     let mut entry_modifiers = Vec::new();
     preprocess_battle_state(
         &mut input.attacker,
@@ -74,7 +75,9 @@ fn calculate_champions_damage(mut input: CalcInput) -> Result<DamageResult, Calc
     let requested_hits = input.move_.hits.max(1);
     let parental_bond_hits = input.attacker.ability == Ability::ParentalBond
         && requested_hits == 1
-        && (input.field.format == Format::Singles || !input.move_.is_spread);
+        && (input.field.format == Format::Singles
+            || !input.move_.is_spread
+            || input.move_.targets_single_target);
     let hit_count = if parental_bond_hits {
         2
     } else {
@@ -410,7 +413,7 @@ fn calculate_champions_single_hit(
         "base_damage={base_damage}, bp={base_power}, attack={attack}, defense={defense}"
     ));
 
-    if field.format != Format::Singles && move_.is_spread {
+    if field.format != Format::Singles && move_.is_spread && !move_.targets_single_target {
         base_damage = apply_mod(base_damage, MOD_THREE_QUARTERS);
         modifiers.push(ModifierBreakdown::new("spread", MOD_THREE_QUARTERS));
     }

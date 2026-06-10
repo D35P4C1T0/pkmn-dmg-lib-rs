@@ -579,7 +579,12 @@ fn named_spread_moves_apply_doubles_spread_modifier_without_manual_flag() {
         .iter()
         .any(|modifier| modifier.label == "spread"));
 
-    let doubles_result = calc(attacker, defender, rock_slide, Field::default());
+    let doubles_result = calc(
+        attacker.clone(),
+        defender.clone(),
+        rock_slide,
+        Field::default(),
+    );
     assert_eq!(
         doubles_result.damage_rolls,
         vec![22, 22, 22, 22, 23, 23, 23, 23, 24, 24, 24, 24, 25, 25, 25, 26]
@@ -588,6 +593,24 @@ fn named_spread_moves_apply_doubles_spread_modifier_without_manual_flag() {
         .applied_modifiers
         .iter()
         .any(|modifier| modifier.label == "spread" && modifier.modifier == 0x0C00));
+
+    let mut single_target_rock_slide =
+        Move::new("Rock Slide", 75, PokemonType::Rock, Category::Physical);
+    single_target_rock_slide.targets_single_target = true;
+    let single_target_result = calc(
+        attacker,
+        defender,
+        single_target_rock_slide,
+        Field::default(),
+    );
+    assert_eq!(
+        single_target_result.damage_rolls,
+        singles_result.damage_rolls
+    );
+    assert!(!single_target_result
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "spread"));
 }
 
 #[test]

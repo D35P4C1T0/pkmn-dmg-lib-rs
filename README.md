@@ -59,6 +59,15 @@ assert_eq!(result.hit_rolls.len(), 1);
 # Ok::<(), damage_calc::CalcError>(())
 ```
 
+`Field::default()` assumes Doubles. Named Champions spread moves such as Rock
+Slide automatically receive the Doubles 0.75 spread modifier. To calculate a
+spread move into only one target, set:
+
+```rust
+let mut rock_slide = Move::new("Rock Slide", 75, PokemonType::Rock, Category::Physical);
+rock_slide.targets_single_target = true;
+```
+
 ## Champions Data API
 
 The crate vendors pinned Champions data so downstream tools do not need to
