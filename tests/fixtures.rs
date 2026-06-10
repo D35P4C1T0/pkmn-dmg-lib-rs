@@ -702,6 +702,92 @@ fn missing_champions_speed_crit_and_aura_abilities_affect_damage() {
 }
 
 #[test]
+fn additional_champions_abilities_that_change_damage_state_are_modeled() {
+    let mut skill_link = stat_100_mon("Skill Link", PokemonType::Grass);
+    skill_link.ability = Ability::SkillLink;
+    let defender = stat_100_mon("Defender", PokemonType::Water);
+    let bullet_seed = Move::new("Bullet Seed", 25, PokemonType::Grass, Category::Physical);
+    let result = calc(
+        skill_link,
+        defender.clone(),
+        bullet_seed.clone(),
+        Field::default(),
+    );
+    assert_eq!(result.hit_rolls.len(), 5);
+    assert!(
+        result.max_damage
+            > calc(
+                stat_100_mon("Attacker", PokemonType::Grass),
+                defender.clone(),
+                bullet_seed,
+                Field::default()
+            )
+            .max_damage
+    );
+
+    let mut speed_boost = stat_100_mon("Speed Boost", PokemonType::Electric);
+    speed_boost.ability = Ability::SpeedBoost;
+    speed_boost.ability_on = true;
+    let electro_ball = Move::new("Electro Ball", 1, PokemonType::Electric, Category::Special);
+    let mut slower_defender = defender.clone();
+    slower_defender.boosts.speed = -1;
+    let boosted_speed = calc(
+        speed_boost.clone(),
+        slower_defender.clone(),
+        electro_ball.clone(),
+        Field::default(),
+    );
+    speed_boost.ability_on = false;
+    let normal_speed = calc(speed_boost, slower_defender, electro_ball, Field::default());
+    assert!(boosted_speed.min_damage > normal_speed.min_damage);
+    assert!(boosted_speed
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "Speed Boost"));
+
+    let mut opportunist = stat_100_mon("Opportunist", PokemonType::Psychic);
+    opportunist.ability = Ability::Opportunist;
+    opportunist.ability_on = true;
+    let mut boosted_target = defender.clone();
+    boosted_target.boosts.special_attack = 2;
+    let psychic = Move::new("Psychic", 90, PokemonType::Psychic, Category::Special);
+    let copied = calc(
+        opportunist.clone(),
+        boosted_target.clone(),
+        psychic.clone(),
+        Field::default(),
+    );
+    opportunist.ability_on = false;
+    let uncopied = calc(opportunist, boosted_target, psychic, Field::default());
+    assert!(copied.min_damage > uncopied.min_damage);
+    assert!(copied
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "Opportunist"));
+
+    let mut gale_wings = stat_100_mon("Gale Wings", PokemonType::Flying);
+    gale_wings.ability = Ability::GaleWings;
+    let mut armor_tail = stat_100_mon("Armor Tail", PokemonType::Normal);
+    armor_tail.ability = Ability::ArmorTail;
+    let aerial_ace = Move::new("Aerial Ace", 60, PokemonType::Flying, Category::Physical);
+    let blocked = calc(
+        gale_wings.clone(),
+        armor_tail.clone(),
+        aerial_ace.clone(),
+        Field::default(),
+    );
+    assert_eq!(blocked.damage_rolls, vec![0]);
+    assert!(blocked
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "priority-blocking ability"));
+    gale_wings.max_hp_override = Some(200);
+    gale_wings.current_hp = Some(199);
+    let unblocked = calc(gale_wings, armor_tail, aerial_ace, Field::default());
+    assert!(unblocked.min_damage > 0);
+}
+
+#[test]
 fn ruin_field_modifiers_apply_at_the_correct_stage() {
     let attacker = stat_100_mon("Attacker", PokemonType::Fighting);
     let defender = stat_100_mon("Defender", PokemonType::Psychic);

@@ -71,6 +71,7 @@ fn calculate_champions_damage(mut input: CalcInput) -> Result<DamageResult, Calc
         &mut input.field,
         &mut entry_modifiers,
     )?;
+    apply_hit_count_defaults(&mut input.move_, input.attacker.ability);
 
     let requested_hits = input.move_.hits.max(1);
     let parental_bond_hits = input.attacker.ability == Ability::ParentalBond
@@ -195,6 +196,7 @@ fn calculate_champions_single_hit(
 
     apply_move_metadata_defaults(&mut move_);
     apply_move_type_changes(&mut move_, &attacker, &field);
+    apply_priority_defaults(&mut move_, &attacker, attacker_current_hp, attacker_max_hp);
     let ate_ize_boosted = apply_ability_type_change(&mut move_, &attacker, &mut modifiers);
 
     if move_.base_power == 0 || move_.category == Category::Status {
@@ -750,6 +752,10 @@ fn preprocess_battle_state(
     check_seeds(defender, field.terrain, modifiers);
     check_sword_shield(attacker, modifiers);
     check_sword_shield(defender, modifiers);
+    check_speed_boost(attacker, modifiers);
+    check_speed_boost(defender, modifiers);
+    check_opportunist(attacker, defender, modifiers);
+    check_opportunist(defender, attacker, modifiers);
     check_wind_rider(attacker, field.attacker_tailwind, modifiers);
     check_wind_rider(defender, field.defender_tailwind, modifiers);
     check_intimidate(attacker, defender, modifiers);
@@ -979,6 +985,53 @@ fn check_sword_shield(pokemon: &mut Pokemon, modifiers: &mut Vec<ModifierBreakdo
     } else if pokemon.ability == Ability::DauntlessShield && pokemon.ability_on {
         boost_stat(pokemon, Stat::Defense, 1);
         modifiers.push(ModifierBreakdown::new("Dauntless Shield", 0));
+    }
+}
+
+fn check_speed_boost(pokemon: &mut Pokemon, modifiers: &mut Vec<ModifierBreakdown>) {
+    if pokemon.ability == Ability::SpeedBoost && pokemon.ability_on {
+        boost_stat(pokemon, Stat::Speed, 1);
+        modifiers.push(ModifierBreakdown::new("Speed Boost", 0));
+    }
+}
+
+fn check_opportunist(
+    source: &mut Pokemon,
+    target: &Pokemon,
+    modifiers: &mut Vec<ModifierBreakdown>,
+) {
+    if source.ability != Ability::Opportunist || !source.ability_on {
+        return;
+    }
+    let mut copied = false;
+    if target.boosts.attack > 0 {
+        source.boosts.attack = source.boosts.attack.max(target.boosts.attack);
+        copied = true;
+    }
+    if target.boosts.defense > 0 {
+        source.boosts.defense = source.boosts.defense.max(target.boosts.defense);
+        copied = true;
+    }
+    if target.boosts.special_attack > 0 {
+        source.boosts.special_attack = source
+            .boosts
+            .special_attack
+            .max(target.boosts.special_attack);
+        copied = true;
+    }
+    if target.boosts.special_defense > 0 {
+        source.boosts.special_defense = source
+            .boosts
+            .special_defense
+            .max(target.boosts.special_defense);
+        copied = true;
+    }
+    if target.boosts.speed > 0 {
+        source.boosts.speed = source.boosts.speed.max(target.boosts.speed);
+        copied = true;
+    }
+    if copied {
+        modifiers.push(ModifierBreakdown::new("Opportunist", 0));
     }
 }
 
@@ -1241,6 +1294,46 @@ fn apply_move_metadata_defaults(move_: &mut Move) {
     if is_champions_spread_move(&move_.name) {
         move_.is_spread = true;
     }
+}
+
+fn apply_hit_count_defaults(move_: &mut Move, attacker_ability: Ability) {
+    if attacker_ability == Ability::SkillLink && move_.hits <= 1 {
+        if move_.name == "Population Bomb" {
+            move_.hits = 10;
+        } else if is_skill_link_move(&move_.name) {
+            move_.hits = 5;
+        }
+    }
+}
+
+fn apply_priority_defaults(
+    move_: &mut Move,
+    attacker: &Pokemon,
+    attacker_current_hp: u16,
+    attacker_max_hp: u16,
+) {
+    if attacker.ability == Ability::GaleWings
+        && move_.type_ == PokemonType::Flying
+        && attacker_current_hp == attacker_max_hp
+    {
+        move_.is_priority = true;
+    }
+}
+
+fn is_skill_link_move(name: &str) -> bool {
+    matches!(
+        name,
+        "Arm Thrust"
+            | "Bone Rush"
+            | "Bullet Seed"
+            | "Double Slap"
+            | "Fury Attack"
+            | "Fury Swipes"
+            | "Icicle Spear"
+            | "Pin Missile"
+            | "Rock Blast"
+            | "Tail Slap"
+    )
 }
 
 fn is_champions_spread_move(name: &str) -> bool {
