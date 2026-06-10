@@ -220,6 +220,7 @@ fn calculate_champions_single_hit(
         field.attacker_tailwind,
         field.attacker_swamp,
         attacker_highest_stat,
+        &field,
     );
     let defender_speed = final_speed(
         &defender,
@@ -227,6 +228,7 @@ fn calculate_champions_single_hit(
         field.defender_tailwind,
         field.defender_swamp,
         defender_highest_stat,
+        &field,
     );
     let attacker_moves_first = attacker_speed > defender_speed;
 
@@ -298,7 +300,16 @@ fn calculate_champions_single_hit(
         return Ok(result);
     }
 
-    let is_critical = move_.is_critical;
+    let mut is_critical = move_.is_critical
+        || (attacker.ability == Ability::Merciless
+            && matches!(
+                defender.status,
+                StatusCondition::Poisoned | StatusCondition::BadlyPoisoned
+            ));
+    if is_critical && matches!(def_ability, Ability::BattleArmor | Ability::ShellArmor) {
+        is_critical = false;
+        modifiers.push(ModifierBreakdown::new("critical blocked", 0));
+    }
     let base_power = calc_base_power(
         &move_,
         &attacker,
@@ -718,6 +729,8 @@ fn preprocess_battle_state(
     check_trace(attacker, defender, modifiers);
     check_trace(defender, attacker, modifiers);
     check_neutralizing_gas(attacker, defender, field, modifiers);
+    check_weather_setters(attacker, defender, field, modifiers);
+    check_screen_cleaner(attacker, defender, field, modifiers);
 
     preprocess_pokemon(attacker, field.weather, field.terrain);
     preprocess_pokemon(defender, field.weather, field.terrain);
@@ -865,6 +878,49 @@ fn check_klutz(pokemon: &mut Pokemon, modifiers: &mut Vec<ModifierBreakdown>) {
     }
 }
 
+fn check_weather_setters(
+    attacker: &Pokemon,
+    defender: &Pokemon,
+    field: &mut Field,
+    modifiers: &mut Vec<ModifierBreakdown>,
+) {
+    let weather = if attacker.ability == Ability::Drizzle || defender.ability == Ability::Drizzle {
+        Some((Weather::Rain, "Drizzle"))
+    } else if attacker.ability == Ability::Drought || defender.ability == Ability::Drought {
+        Some((Weather::Sun, "Drought"))
+    } else if attacker.ability == Ability::SandStream || defender.ability == Ability::SandStream {
+        Some((Weather::Sand, "Sand Stream"))
+    } else if attacker.ability == Ability::SnowWarning || defender.ability == Ability::SnowWarning {
+        Some((Weather::Snow, "Snow Warning"))
+    } else {
+        None
+    };
+
+    if let Some((weather, label)) = weather {
+        if field.weather == Weather::None {
+            field.weather = weather;
+            modifiers.push(ModifierBreakdown::new(label, 0));
+        }
+    }
+}
+
+fn check_screen_cleaner(
+    attacker: &Pokemon,
+    defender: &Pokemon,
+    field: &mut Field,
+    modifiers: &mut Vec<ModifierBreakdown>,
+) {
+    if matches!(
+        (attacker.ability, defender.ability),
+        (Ability::ScreenCleaner, _) | (_, Ability::ScreenCleaner)
+    ) {
+        field.defender_side.reflect = false;
+        field.defender_side.light_screen = false;
+        field.defender_side.aurora_veil = false;
+        modifiers.push(ModifierBreakdown::new("Screen Cleaner", 0));
+    }
+}
+
 fn check_paradox_abilities(
     pokemon: &mut Pokemon,
     terrain: crate::types::Terrain,
@@ -939,6 +995,10 @@ fn check_intimidate(
     modifiers: &mut Vec<ModifierBreakdown>,
 ) {
     if source.ability != Ability::Intimidate || !source.ability_on {
+        return;
+    }
+    if target.ability == Ability::FlowerVeil && target.has_type(PokemonType::Grass) {
+        modifiers.push(ModifierBreakdown::new("Flower Veil blocked Intimidate", 0));
         return;
     }
     if matches!(target.ability, Ability::Contrary | Ability::GuardDog) {
@@ -1844,6 +1904,9 @@ fn calc_bp_mods(
     if field.steely_spirit && move_.type_ == PokemonType::Steel {
         push_mod(&mut mods, modifiers, "Ally Steely Spirit", MOD_1_5);
     }
+    if attacker.ability == Ability::FairyAura && move_.type_ == PokemonType::Fairy {
+        push_mod(&mut mods, modifiers, "Fairy Aura", MOD_1_33);
+    }
 
     if (attacker.ability == Ability::SheerForce && move_.has_secondary_effect)
         || (attacker.ability == Ability::SandForce
@@ -2416,6 +2479,7 @@ fn final_speed(
     tailwind: bool,
     swamp: bool,
     highest_stat: Stat,
+    field: &Field,
 ) -> u16 {
     let mut speed = staged_speed as i32;
     let mut speed_mods = Vec::new();
@@ -2433,16 +2497,36 @@ fn final_speed(
     if pokemon.paradox_ability_boost && highest_stat == Stat::Speed {
         speed_mods.push(MOD_1_5);
     }
+    if speed_ability_active(pokemon, field) {
+        speed_mods.push(MOD_DOUBLE);
+    }
+    if pokemon.ability == Ability::Unburden && pokemon.ability_on {
+        speed_mods.push(MOD_DOUBLE);
+    }
+    if pokemon.ability == Ability::QuickFeet && pokemon.status != StatusCondition::Healthy {
+        speed_mods.push(MOD_1_5);
+    }
     if !speed_mods.is_empty() {
         speed = apply_mod(speed, chain_mods(&speed_mods));
     }
-    if pokemon.status == StatusCondition::Paralyzed {
+    if pokemon.status == StatusCondition::Paralyzed && pokemon.ability != Ability::QuickFeet {
         speed /= 2;
     }
     if speed > 65535 {
         speed %= 65536;
     }
     speed.min(10000).max(0) as u16
+}
+
+fn speed_ability_active(pokemon: &Pokemon, field: &Field) -> bool {
+    match pokemon.ability {
+        Ability::SwiftSwim => field.weather.is_rain(),
+        Ability::Chlorophyll => field.weather.is_sun(),
+        Ability::SandRush => field.weather == Weather::Sand,
+        Ability::SlushRush => matches!(field.weather, Weather::Hail | Weather::Snow),
+        Ability::SurgeSurfer => field.terrain == crate::types::Terrain::Electric,
+        _ => false,
+    }
 }
 
 fn cant_remove_item(item: Item, species: &str) -> bool {

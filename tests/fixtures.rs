@@ -539,6 +539,169 @@ fn remaining_champions_abilities_plus_minus_ripen_disguise_and_sand_spit_match_j
 }
 
 #[test]
+fn missing_champions_entry_and_defensive_abilities_affect_damage() {
+    let mut rain_attacker = stat_100_mon("Drizzle", PokemonType::Water);
+    rain_attacker.ability = Ability::Drizzle;
+    let defender = stat_100_mon("Defender", PokemonType::Normal);
+    let water = Move::new("Water Pulse", 60, PokemonType::Water, Category::Special);
+    let drizzle_result = calc(
+        rain_attacker,
+        defender.clone(),
+        water.clone(),
+        Field::default(),
+    );
+    let manual_rain = {
+        let mut field = Field::default();
+        field.weather = Weather::Rain;
+        calc(
+            stat_100_mon("Attacker", PokemonType::Water),
+            defender.clone(),
+            water,
+            field,
+        )
+    };
+    assert_eq!(drizzle_result.damage_rolls, manual_rain.damage_rolls);
+    assert!(drizzle_result
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "Drizzle"));
+
+    let mut attacker = stat_100_mon("Flower Veil", PokemonType::Grass);
+    attacker.ability = Ability::FlowerVeil;
+    let mut intimidate_defender = defender.clone();
+    intimidate_defender.ability = Ability::Intimidate;
+    intimidate_defender.ability_on = true;
+    let tackle = Move::new("Tackle", 40, PokemonType::Normal, Category::Physical);
+    let blocked = calc(
+        attacker.clone(),
+        intimidate_defender.clone(),
+        tackle.clone(),
+        Field::default(),
+    );
+    attacker.ability = Ability::None;
+    let lowered = calc(
+        attacker,
+        intimidate_defender,
+        tackle.clone(),
+        Field::default(),
+    );
+    assert!(blocked.min_damage > lowered.min_damage);
+    assert!(blocked
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "Flower Veil blocked Intimidate"));
+
+    let mut screened = Field::default();
+    screened.defender_side.reflect = true;
+    let reflected = calc(
+        stat_100_mon("Attacker", PokemonType::Normal),
+        defender.clone(),
+        tackle.clone(),
+        screened,
+    );
+    let mut cleaner_defender = defender;
+    cleaner_defender.ability = Ability::ScreenCleaner;
+    let mut screened = Field::default();
+    screened.defender_side.reflect = true;
+    let cleaned = calc(
+        stat_100_mon("Attacker", PokemonType::Normal),
+        cleaner_defender,
+        tackle,
+        screened,
+    );
+    assert!(cleaned.min_damage > reflected.min_damage);
+    assert!(cleaned
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "Screen Cleaner"));
+}
+
+#[test]
+fn missing_champions_speed_crit_and_aura_abilities_affect_damage() {
+    let mut swift = stat_100_mon("Swift Swim", PokemonType::Water);
+    swift.ability = Ability::SwiftSwim;
+    let defender = stat_100_mon("Defender", PokemonType::Normal);
+    let electro_ball = Move::new("Electro Ball", 1, PokemonType::Electric, Category::Special);
+    let mut rain = Field::default();
+    rain.weather = Weather::Rain;
+    let boosted_speed = calc(swift.clone(), defender.clone(), electro_ball.clone(), rain);
+    swift.ability = Ability::None;
+    let mut rain = Field::default();
+    rain.weather = Weather::Rain;
+    let normal_speed = calc(swift, defender.clone(), electro_ball, rain);
+    assert!(boosted_speed.min_damage > normal_speed.min_damage);
+
+    let mut unburden = stat_100_mon("Unburden", PokemonType::Normal);
+    unburden.ability = Ability::Unburden;
+    unburden.ability_on = true;
+    let unburden_damage = calc(
+        unburden.clone(),
+        defender.clone(),
+        Move::new("Electro Ball", 1, PokemonType::Electric, Category::Special),
+        Field::default(),
+    );
+    unburden.ability_on = false;
+    let normal_damage = calc(
+        unburden,
+        defender.clone(),
+        Move::new("Electro Ball", 1, PokemonType::Electric, Category::Special),
+        Field::default(),
+    );
+    assert!(unburden_damage.min_damage > normal_damage.min_damage);
+
+    let mut battle_armor = defender.clone();
+    battle_armor.ability = Ability::BattleArmor;
+    let mut crit = Move::new("Tackle", 40, PokemonType::Normal, Category::Physical);
+    crit.is_critical = true;
+    let blocked = calc(
+        stat_100_mon("Attacker", PokemonType::Normal),
+        battle_armor,
+        crit,
+        Field::default(),
+    );
+    assert!(blocked
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "critical blocked"));
+    assert!(!blocked
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "critical"));
+
+    let mut merciless = stat_100_mon("Merciless", PokemonType::Poison);
+    merciless.ability = Ability::Merciless;
+    let mut poisoned = defender.clone();
+    poisoned.status = StatusCondition::Poisoned;
+    let result = calc(
+        merciless,
+        poisoned,
+        Move::new("Poison Jab", 80, PokemonType::Poison, Category::Physical),
+        Field::default(),
+    );
+    assert!(result
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "critical"));
+
+    let mut fairy = stat_100_mon("Fairy Aura", PokemonType::Fairy);
+    fairy.ability = Ability::FairyAura;
+    let fairy_move = Move::new("Moonblast", 95, PokemonType::Fairy, Category::Special);
+    let boosted = calc(
+        fairy.clone(),
+        defender.clone(),
+        fairy_move.clone(),
+        Field::default(),
+    );
+    fairy.ability = Ability::None;
+    let normal = calc(fairy, defender, fairy_move, Field::default());
+    assert!(boosted.min_damage > normal.min_damage);
+    assert!(boosted
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "Fairy Aura"));
+}
+
+#[test]
 fn ruin_field_modifiers_apply_at_the_correct_stage() {
     let attacker = stat_100_mon("Attacker", PokemonType::Fighting);
     let defender = stat_100_mon("Defender", PokemonType::Psychic);

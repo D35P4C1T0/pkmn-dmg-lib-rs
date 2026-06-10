@@ -114,6 +114,9 @@ Implemented and covered by tests:
 - public zero-fetch list constants in `damage_calc::data::champions` for
   Champions items, Regulation M-A Pokemon, Pokemon/form summaries, and
   abilities
+- typed `Ability` variants for every ability name in the vendored Champions
+  ability list, with direct/preprocessing mechanics implemented where they
+  affect damage calculation state
 - Light Ball, Shell Bell/Fling power, and Champions Mega-stone Fling/Knock Off
   restrictions
 - common offensive and defensive ability modifiers
