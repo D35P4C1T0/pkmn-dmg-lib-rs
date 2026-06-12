@@ -10,8 +10,8 @@ use crate::mechanics::modifiers::{
 };
 use crate::stats::calculate_stats;
 use crate::types::{
-    Ability, CalcError, Category, Field, Format, Item, Move, Pokemon, PokemonType, Ruleset, Stat,
-    StatusCondition, Weather,
+    Ability, CalcError, Category, Field, Format, Item, Move, Pokemon, PokemonType, RivalryTarget,
+    Ruleset, Stat, StatusCondition, Weather,
 };
 
 #[cfg(feature = "serde")]
@@ -1999,6 +1999,17 @@ fn calc_bp_mods(
     }
     if attacker.ability == Ability::FairyAura && move_.type_ == PokemonType::Fairy {
         push_mod(&mut mods, modifiers, "Fairy Aura", MOD_1_33);
+    }
+    if attacker.ability == Ability::Rivalry {
+        match attacker.rivalry_target {
+            RivalryTarget::SameGender => {
+                push_mod(&mut mods, modifiers, "Rivalry same gender", 0x1400)
+            }
+            RivalryTarget::OppositeGender => {
+                push_mod(&mut mods, modifiers, "Rivalry opposite gender", 0x0c00)
+            }
+            RivalryTarget::Unspecified => {}
+        }
     }
 
     if (attacker.ability == Ability::SheerForce && move_.has_secondary_effect)

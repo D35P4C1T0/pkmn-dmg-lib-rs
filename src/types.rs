@@ -174,6 +174,15 @@ pub enum StatusCondition {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum RivalryTarget {
+    #[default]
+    Unspecified,
+    SameGender,
+    OppositeGender,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Weather {
     #[default]
     None,
@@ -795,6 +804,7 @@ pub struct Pokemon {
     pub supreme_overlord_allies: u8,
     pub paradox_ability_boost: bool,
     pub highest_stat_override: Option<Stat>,
+    pub rivalry_target: RivalryTarget,
     pub weight_kg: f32,
     pub custom_bp_mods: Vec<i32>,
     pub custom_attack_mods: Vec<i32>,
@@ -830,6 +840,7 @@ impl Pokemon {
             supreme_overlord_allies: 0,
             paradox_ability_boost: false,
             highest_stat_override: None,
+            rivalry_target: RivalryTarget::Unspecified,
             weight_kg: 10.0,
             custom_bp_mods: Vec::new(),
             custom_attack_mods: Vec::new(),

@@ -1,7 +1,7 @@
 use damage_calc::{
     calculate_damage, calculate_hp, calculate_non_hp_stat, Ability, Boosts, CalcInput, Category,
-    Field, Format, Item, Move, Nature, Pokemon, PokemonType, Ruleset, SideConditions, Stat,
-    StatTable, StatusCondition, Terrain, Weather,
+    Field, Format, Item, Move, Nature, Pokemon, PokemonType, RivalryTarget, Ruleset,
+    SideConditions, Stat, StatTable, StatusCondition, Terrain, Weather,
 };
 use std::collections::HashSet;
 use std::fs;
@@ -380,6 +380,76 @@ fn variable_base_power_moves_match_champions_formulas() {
         calc(fast, slow, electro_ball, Field::default()).damage_rolls,
         vec![170, 174, 176, 176, 180, 182, 182, 186, 188, 188, 192, 194, 194, 198, 200, 204]
     );
+
+    let attacker = stat_100_mon("Attacker", PokemonType::Dark);
+    let defender = stat_100_mon("Defender", PokemonType::Psychic);
+    let mut payback = Move::new("Payback", 50, PokemonType::Dark, Category::Physical);
+    let base_payback = calc(
+        attacker.clone(),
+        defender.clone(),
+        payback.clone(),
+        Field::default(),
+    );
+    assert_eq!(
+        base_payback.damage_rolls,
+        vec![60, 60, 60, 62, 62, 62, 62, 66, 66, 66, 66, 68, 68, 68, 68, 72]
+    );
+    payback.is_double_power = true;
+    let boosted_payback = calc(
+        attacker.clone(),
+        defender.clone(),
+        payback,
+        Field::default(),
+    );
+    assert_eq!(
+        boosted_payback.damage_rolls,
+        vec![116, 116, 120, 120, 120, 122, 122, 126, 126, 128, 128, 132, 132, 134, 134, 138]
+    );
+    assert!(boosted_payback
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "double-power move flag"));
+
+    let attacker = stat_100_mon("Attacker", PokemonType::Electric);
+    let defender = stat_100_mon("Defender", PokemonType::Water);
+    let mut bolt_beak = Move::new("Bolt Beak", 85, PokemonType::Electric, Category::Physical);
+    let base_bolt_beak = calc(
+        attacker.clone(),
+        defender.clone(),
+        bolt_beak.clone(),
+        Field::default(),
+    );
+    assert_eq!(
+        base_bolt_beak.damage_rolls,
+        vec![98, 98, 98, 102, 102, 104, 104, 104, 108, 108, 110, 110, 110, 114, 114, 116]
+    );
+    bolt_beak.is_double_power = true;
+    let boosted_bolt_beak = calc(attacker, defender, bolt_beak, Field::default());
+    assert_eq!(
+        boosted_bolt_beak.damage_rolls,
+        vec![192, 194, 198, 198, 200, 204, 206, 206, 210, 212, 216, 216, 218, 222, 224, 228]
+    );
+    assert!(boosted_bolt_beak
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "double-power move flag"));
+
+    let mut assurance = Move::new("Assurance", 60, PokemonType::Dark, Category::Physical);
+    assurance.is_double_power = true;
+    let result = calc(
+        stat_100_mon("Attacker", PokemonType::Dark),
+        stat_100_mon("Defender", PokemonType::Psychic),
+        assurance,
+        Field::default(),
+    );
+    assert_eq!(
+        result.damage_rolls,
+        vec![134, 138, 138, 140, 144, 144, 146, 146, 150, 150, 152, 152, 156, 156, 158, 162]
+    );
+    assert!(result
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "double-power move flag"));
 }
 
 #[test]
@@ -699,6 +769,54 @@ fn missing_champions_speed_crit_and_aura_abilities_affect_damage() {
         .applied_modifiers
         .iter()
         .any(|modifier| modifier.label == "Fairy Aura"));
+
+    let mut rivalry = stat_100_mon("Rivalry", PokemonType::Normal);
+    rivalry.ability = Ability::Rivalry;
+    let tackle = Move::new("Tackle", 40, PokemonType::Normal, Category::Physical);
+    let neutral = calc(
+        rivalry.clone(),
+        stat_100_mon("Defender", PokemonType::Normal),
+        tackle.clone(),
+        Field::default(),
+    );
+    assert_eq!(
+        neutral.damage_rolls,
+        vec![24, 24, 24, 24, 24, 25, 25, 25, 25, 25, 27, 27, 27, 27, 27, 28]
+    );
+
+    rivalry.rivalry_target = RivalryTarget::SameGender;
+    let same_gender = calc(
+        rivalry.clone(),
+        stat_100_mon("Defender", PokemonType::Normal),
+        tackle.clone(),
+        Field::default(),
+    );
+    assert_eq!(
+        same_gender.damage_rolls,
+        vec![30, 30, 30, 31, 31, 31, 31, 33, 33, 33, 33, 34, 34, 34, 34, 36]
+    );
+    assert!(same_gender
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "Rivalry same gender"));
+
+    rivalry.rivalry_target = RivalryTarget::OppositeGender;
+    let opposite_gender = calc(
+        rivalry,
+        stat_100_mon("Defender", PokemonType::Normal),
+        tackle,
+        Field::default(),
+    );
+    assert_eq!(
+        opposite_gender.damage_rolls,
+        vec![18, 18, 19, 19, 19, 19, 19, 19, 19, 21, 21, 21, 21, 21, 21, 22]
+    );
+    assert!(opposite_gender
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "Rivalry opposite gender"));
+    assert!(same_gender.min_damage > neutral.min_damage);
+    assert!(opposite_gender.max_damage < neutral.max_damage);
 }
 
 #[test]
