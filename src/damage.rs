@@ -1,21 +1,30 @@
 use crate::data::items::{
-    berry_resist_type, can_fling, drive_type, fling_power, gem_type, is_gem, item_boost_type,
-    locked_item_for_species, memory_type, natural_gift,
+    drive_type, item_boost_type, locked_item_for_species, memory_type, natural_gift,
 };
 use crate::data::type_chart::move_effectiveness;
 use crate::mechanics::modifiers::{
-    apply_mod, chain_mods, modified_stat, poke_round_ratio, MODIFIER_DENOMINATOR,
-    MOD_0_67_DOUBLES_SCREEN, MOD_1_1, MOD_1_1_ALT, MOD_1_2, MOD_1_25, MOD_1_3, MOD_1_33, MOD_1_5,
-    MOD_DOUBLE, MOD_HALF, MOD_LIFE_ORB, MOD_THREE_QUARTERS,
+    apply_mod, chain_mods, modified_stat, poke_round_ratio, MODIFIER_DENOMINATOR, MOD_1_2, MOD_1_3,
+    MOD_1_5, MOD_DOUBLE, MOD_HALF, MOD_THREE_QUARTERS,
 };
 use crate::stats::calculate_stats;
 use crate::types::{
-    Ability, CalcError, Category, Field, Format, Item, Move, Pokemon, PokemonType, RivalryTarget,
-    Ruleset, Stat, StatusCondition, Weather,
+    Ability, CalcError, Category, Field, Format, Item, Move, Pokemon, PokemonType, Ruleset, Stat,
+    StatusCondition, Weather,
 };
+use std::collections::HashMap;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
+
+mod attack_mods;
+mod base_power;
+mod bp_mods;
+mod final_mods;
+
+use attack_mods::calc_attack_mods;
+use base_power::calc_base_power;
+use bp_mods::calc_bp_mods;
+use final_mods::calc_final_mods;
 
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -51,10 +60,19 @@ pub struct DamageResult {
     pub damage_rolls: Vec<u16>,
     pub hit_rolls: Vec<Vec<u16>>,
     pub percent_range: (f32, f32),
+    /// Cumulative KO chance after using this move 1, 2, 3, and 4 times.
+    ///
+    /// This models one consumed defender healing item in between hits and uses,
+    /// so callers can surface text such as "guaranteed 2HKO after Sitrus Berry
+    /// recovery" without reimplementing item-trigger timing.
+    pub ko_chance_by_move_use: Vec<f32>,
     pub ko_chance: Option<f32>,
     pub applied_modifiers: Vec<ModifierBreakdown>,
     pub debug: Vec<String>,
 }
+
+const KO_CHANCE_MAX_USES: usize = 4;
+const KO_CHANCE_SEQUENCE_LIMIT: usize = 65_536;
 
 pub fn calculate_damage(input: CalcInput) -> Result<DamageResult, CalcError> {
     match input.ruleset {
@@ -142,11 +160,16 @@ fn calculate_champions_damage(mut input: CalcInput) -> Result<DamageResult, Calc
         min_damage as f32 * 100.0 / defender_max_hp as f32,
         max_damage as f32 * 100.0 / defender_max_hp as f32,
     );
-    let ko_rolls = damage_rolls
-        .iter()
-        .filter(|&&damage| damage >= defender_current_hp)
-        .count();
-    let ko_chance = Some(ko_rolls as f32 / damage_rolls.len() as f32);
+    let ko_chance_by_move_use = ko_chances_after_move_uses(
+        &hit_rolls,
+        defender_current_hp,
+        defender_max_hp,
+        defender.item,
+        defender.ability,
+        healing_item_suppressed(&input.move_, attacker.ability),
+        KO_CHANCE_MAX_USES,
+    );
+    let ko_chance = ko_chance_by_move_use.first().copied();
 
     Ok(DamageResult {
         min_damage,
@@ -154,6 +177,7 @@ fn calculate_champions_damage(mut input: CalcInput) -> Result<DamageResult, Calc
         damage_rolls,
         hit_rolls,
         percent_range,
+        ko_chance_by_move_use,
         ko_chance,
         applied_modifiers,
         debug,
@@ -206,6 +230,7 @@ fn calculate_champions_single_hit(
             damage_rolls: vec![0],
             hit_rolls: vec![vec![0]],
             percent_range: (0.0, 0.0),
+            ko_chance_by_move_use: vec![0.0; KO_CHANCE_MAX_USES],
             ko_chance: Some(0.0),
             applied_modifiers: modifiers,
             debug,
@@ -283,6 +308,9 @@ fn calculate_champions_single_hit(
             (defender_max_hp / 8).max(1),
             defender_max_hp,
             defender_current_hp,
+            defender.item,
+            defender.ability,
+            healing_item_suppressed(&move_, attacker.ability),
             modifiers,
             debug,
         ));
@@ -515,18 +543,25 @@ fn calculate_champions_single_hit(
         min_damage as f32 * 100.0 / defender_max_hp as f32,
         max_damage as f32 * 100.0 / defender_max_hp as f32,
     );
-    let ko_rolls = rolls
-        .iter()
-        .filter(|&&damage| damage >= defender_current_hp)
-        .count();
-    let ko_chance = Some(ko_rolls as f32 / rolls.len() as f32);
+    let hit_rolls = vec![rolls.clone()];
+    let ko_chance_by_move_use = ko_chances_after_move_uses(
+        &hit_rolls,
+        defender_current_hp,
+        defender_max_hp,
+        defender.item,
+        defender.ability,
+        healing_item_suppressed(&move_, attacker.ability),
+        KO_CHANCE_MAX_USES,
+    );
+    let ko_chance = ko_chance_by_move_use.first().copied();
 
     Ok(DamageResult {
         min_damage,
         max_damage,
         damage_rolls: rolls.clone(),
-        hit_rolls: vec![rolls],
+        hit_rolls,
         percent_range,
+        ko_chance_by_move_use,
         ko_chance,
         applied_modifiers: modifiers,
         debug,
@@ -546,6 +581,187 @@ fn combine_hit_rolls(hit_rolls: &[Vec<u16>]) -> Vec<u16> {
     }
     totals.sort_unstable();
     totals
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct KoState {
+    hp: u16,
+    item: Item,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HealingItemRecovery {
+    heal: u16,
+    threshold: u16,
+}
+
+fn ko_chances_after_move_uses(
+    hit_rolls: &[Vec<u16>],
+    defender_current_hp: u16,
+    defender_max_hp: u16,
+    defender_item: Item,
+    defender_ability: Ability,
+    healing_suppressed: bool,
+    max_uses: usize,
+) -> Vec<f32> {
+    if hit_rolls.is_empty() || hit_rolls.iter().any(Vec::is_empty) {
+        return vec![0.0; max_uses];
+    }
+
+    let Some(sequence_count) = hit_sequence_count(hit_rolls) else {
+        return vec![raw_ko_chance(hit_rolls, defender_current_hp)];
+    };
+    if sequence_count > KO_CHANCE_SEQUENCE_LIMIT {
+        return vec![raw_ko_chance(hit_rolls, defender_current_hp)];
+    }
+
+    let sequence_probability = 1.0 / sequence_count as f64;
+    let mut active_states = HashMap::from([(
+        KoState {
+            hp: defender_current_hp,
+            item: defender_item,
+        },
+        1.0f64,
+    )]);
+    let mut cumulative_ko = 0.0f64;
+    let mut chances = Vec::with_capacity(max_uses);
+
+    for _ in 0..max_uses {
+        let mut next_states = HashMap::<KoState, f64>::new();
+        let mut ko_this_use = 0.0f64;
+
+        for (state, state_probability) in active_states {
+            visit_hit_sequence_outcomes(
+                hit_rolls,
+                0,
+                state,
+                defender_max_hp,
+                defender_ability,
+                healing_suppressed,
+                &mut |outcome| {
+                    let probability = state_probability * sequence_probability;
+                    if let Some(next_state) = outcome {
+                        *next_states.entry(next_state).or_insert(0.0) += probability;
+                    } else {
+                        ko_this_use += probability;
+                    }
+                },
+            );
+        }
+
+        cumulative_ko = (cumulative_ko + ko_this_use).min(1.0);
+        chances.push(cumulative_ko as f32);
+        active_states = next_states;
+
+        if cumulative_ko >= 1.0 || active_states.is_empty() {
+            chances.resize(max_uses, cumulative_ko as f32);
+            break;
+        }
+    }
+
+    chances
+}
+
+fn hit_sequence_count(hit_rolls: &[Vec<u16>]) -> Option<usize> {
+    hit_rolls
+        .iter()
+        .try_fold(1usize, |count, rolls| count.checked_mul(rolls.len()))
+}
+
+fn raw_ko_chance(hit_rolls: &[Vec<u16>], defender_current_hp: u16) -> f32 {
+    let damage_rolls = combine_hit_rolls(hit_rolls);
+    if damage_rolls.is_empty() {
+        return 0.0;
+    }
+    let ko_rolls = damage_rolls
+        .iter()
+        .filter(|&&damage| damage >= defender_current_hp)
+        .count();
+    ko_rolls as f32 / damage_rolls.len() as f32
+}
+
+fn visit_hit_sequence_outcomes(
+    hit_rolls: &[Vec<u16>],
+    hit_index: usize,
+    state: KoState,
+    defender_max_hp: u16,
+    defender_ability: Ability,
+    healing_suppressed: bool,
+    on_outcome: &mut impl FnMut(Option<KoState>),
+) {
+    if hit_index == hit_rolls.len() {
+        on_outcome(Some(state));
+        return;
+    }
+
+    for damage in &hit_rolls[hit_index] {
+        let mut next_state = state;
+        next_state.hp = next_state.hp.saturating_sub(*damage);
+        if next_state.hp == 0 {
+            on_outcome(None);
+            continue;
+        }
+        if !healing_suppressed {
+            if let Some(recovery) =
+                healing_item_recovery(next_state.item, defender_max_hp, defender_ability)
+            {
+                if next_state.hp <= recovery.threshold {
+                    next_state.hp = next_state
+                        .hp
+                        .saturating_add(recovery.heal)
+                        .min(defender_max_hp);
+                    next_state.item = Item::None;
+                }
+            }
+        }
+        visit_hit_sequence_outcomes(
+            hit_rolls,
+            hit_index + 1,
+            next_state,
+            defender_max_hp,
+            defender_ability,
+            healing_suppressed,
+            on_outcome,
+        );
+    }
+}
+
+fn healing_item_suppressed(move_: &Move, attacker_ability: Ability) -> bool {
+    matches!(attacker_ability, Ability::Unnerve | Ability::AsOne)
+        || matches!(
+            move_.name.as_str(),
+            "Knock Off" | "Bug Bite" | "Pluck" | "Incinerate"
+        )
+}
+
+fn healing_item_recovery(
+    item: Item,
+    max_hp: u16,
+    defender_ability: Ability,
+) -> Option<HealingItemRecovery> {
+    let (mut heal, threshold) = match item {
+        Item::OranBerry => (10, max_hp / 2),
+        Item::SitrusBerry => (max_hp / 4, max_hp / 2),
+        Item::FigyBerry
+        | Item::IapapaBerry
+        | Item::WikiBerry
+        | Item::AguavBerry
+        | Item::MagoBerry => {
+            let threshold = if defender_ability == Ability::Gluttony {
+                max_hp / 2
+            } else {
+                max_hp / 4
+            };
+            (max_hp / 3, threshold)
+        }
+        _ => return None,
+    };
+
+    if defender_ability == Ability::Ripen && heal > 0 {
+        heal = heal.saturating_mul(2);
+    }
+
+    Some(HealingItemRecovery { heal, threshold })
 }
 
 fn apply_between_hit_effects(
@@ -656,7 +872,7 @@ fn can_be_burned(attacker: &Pokemon, move_: &Move, field: &Field) -> bool {
         && (field.terrain != crate::types::Terrain::Misty || !is_grounded(attacker, field))
 }
 
-fn makes_effective_contact(attacker: &Pokemon, move_: &Move) -> bool {
+pub(super) fn makes_effective_contact(attacker: &Pokemon, move_: &Move) -> bool {
     if move_.makes_contact
         && (attacker.item == Item::ProtectivePads
             || (attacker.item == Item::PunchingGlove && move_.is_punch)
@@ -1047,7 +1263,7 @@ fn check_intimidate(
     target: &mut Pokemon,
     modifiers: &mut Vec<ModifierBreakdown>,
 ) {
-    if source.ability != Ability::Intimidate || !source.ability_on {
+    if source.ability != Ability::Intimidate {
         return;
     }
     if target.ability == Ability::FlowerVeil && target.has_type(PokemonType::Grass) {
@@ -1574,6 +1790,7 @@ fn zero_damage(
         damage_rolls: vec![0],
         hit_rolls: vec![vec![0]],
         percent_range: (0.0, 0.0),
+        ko_chance_by_move_use: vec![0.0; KO_CHANCE_MAX_USES],
         ko_chance: Some(0.0),
         applied_modifiers: modifiers,
         debug,
@@ -1596,6 +1813,9 @@ fn set_damage_result(
         move_,
         defender_max_hp,
         defender_current_hp,
+        defender.item,
+        defender.ability,
+        healing_item_suppressed(move_, attacker.ability),
         modifiers.clone(),
         debug.clone(),
     ) {
@@ -1628,6 +1848,9 @@ fn set_damage_result(
         damage,
         defender_max_hp,
         defender_current_hp,
+        defender.item,
+        defender.ability,
+        healing_item_suppressed(move_, attacker.ability),
         modifiers,
         debug,
     ))
@@ -1637,6 +1860,9 @@ fn counter_damage_result(
     move_: &Move,
     defender_max_hp: u16,
     defender_current_hp: u16,
+    defender_item: Item,
+    defender_ability: Ability,
+    healing_suppressed: bool,
     mut modifiers: Vec<ModifierBreakdown>,
     debug: Vec<String>,
 ) -> Option<DamageResult> {
@@ -1654,6 +1880,9 @@ fn counter_damage_result(
             0,
             defender_max_hp,
             defender_current_hp,
+            defender_item,
+            defender_ability,
+            healing_suppressed,
             modifiers,
             debug,
         ));
@@ -1675,20 +1904,25 @@ fn counter_damage_result(
         min_damage as f32 * 100.0 / defender_max_hp as f32,
         max_damage as f32 * 100.0 / defender_max_hp as f32,
     );
-    let ko_chance = Some(
-        damage_rolls
-            .iter()
-            .filter(|&&damage| damage >= defender_current_hp)
-            .count() as f32
-            / damage_rolls.len() as f32,
+    let hit_rolls = vec![damage_rolls.clone()];
+    let ko_chance_by_move_use = ko_chances_after_move_uses(
+        &hit_rolls,
+        defender_current_hp,
+        defender_max_hp,
+        defender_item,
+        defender_ability,
+        healing_suppressed,
+        KO_CHANCE_MAX_USES,
     );
+    let ko_chance = ko_chance_by_move_use.first().copied();
     modifiers.push(ModifierBreakdown::new("counter-style damage", 0));
     Some(DamageResult {
         min_damage,
         max_damage,
-        hit_rolls: vec![damage_rolls.clone()],
+        hit_rolls,
         damage_rolls,
         percent_range,
+        ko_chance_by_move_use,
         ko_chance,
         applied_modifiers: modifiers,
         debug,
@@ -1699,565 +1933,35 @@ fn single_damage_result(
     damage: u16,
     defender_max_hp: u16,
     defender_current_hp: u16,
+    defender_item: Item,
+    defender_ability: Ability,
+    healing_suppressed: bool,
     modifiers: Vec<ModifierBreakdown>,
     debug: Vec<String>,
 ) -> DamageResult {
     let percent = damage as f32 * 100.0 / defender_max_hp as f32;
+    let hit_rolls = vec![vec![damage]];
+    let ko_chance_by_move_use = ko_chances_after_move_uses(
+        &hit_rolls,
+        defender_current_hp,
+        defender_max_hp,
+        defender_item,
+        defender_ability,
+        healing_suppressed,
+        KO_CHANCE_MAX_USES,
+    );
+    let ko_chance = ko_chance_by_move_use.first().copied();
     DamageResult {
         min_damage: damage,
         max_damage: damage,
         damage_rolls: vec![damage],
-        hit_rolls: vec![vec![damage]],
+        hit_rolls,
         percent_range: (percent, percent),
-        ko_chance: Some(if damage >= defender_current_hp {
-            1.0
-        } else {
-            0.0
-        }),
+        ko_chance_by_move_use,
+        ko_chance,
         applied_modifiers: modifiers,
         debug,
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn calc_base_power(
-    move_: &Move,
-    attacker: &Pokemon,
-    defender: &Pokemon,
-    attacker_current_hp: u16,
-    attacker_max_hp: u16,
-    defender_current_hp: u16,
-    defender_max_hp: u16,
-    field: &Field,
-    attacker_speed: u16,
-    defender_speed: u16,
-    modifiers: &mut Vec<ModifierBreakdown>,
-) -> Result<u16, CalcError> {
-    let bp = match move_.name.as_str() {
-        "Gyro Ball" => {
-            let speed = attacker_speed.max(1);
-            let bp = (25 * defender_speed / speed).min(150);
-            modifiers.push(ModifierBreakdown::new("Gyro Ball base power", 0));
-            bp
-        }
-        "Electro Ball" => {
-            let ratio = if defender_speed == 0 {
-                0
-            } else {
-                attacker_speed / defender_speed
-            };
-            let bp = if ratio >= 4 {
-                150
-            } else if ratio >= 3 {
-                120
-            } else if ratio >= 2 {
-                80
-            } else if ratio >= 1 {
-                60
-            } else {
-                40
-            };
-            modifiers.push(ModifierBreakdown::new("Electro Ball base power", 0));
-            bp
-        }
-        "Low Kick" | "Grass Knot" => {
-            let weight = effective_weight(defender);
-            let bp = if weight >= 200.0 {
-                120
-            } else if weight >= 100.0 {
-                100
-            } else if weight >= 50.0 {
-                80
-            } else if weight >= 25.0 {
-                60
-            } else if weight >= 10.0 {
-                40
-            } else {
-                20
-            };
-            modifiers.push(ModifierBreakdown::new("weight-based base power", 0));
-            bp
-        }
-        "Heavy Slam" | "Heat Crash" => {
-            let defender_weight = effective_weight(defender).max(0.1);
-            let ratio = effective_weight(attacker) / defender_weight;
-            let bp = if ratio >= 5.0 {
-                120
-            } else if ratio >= 4.0 {
-                100
-            } else if ratio >= 3.0 {
-                80
-            } else if ratio >= 2.0 {
-                60
-            } else {
-                40
-            };
-            modifiers.push(ModifierBreakdown::new("weight-ratio base power", 0));
-            bp
-        }
-        "Eruption" | "Water Spout" | "Dragon Energy" => {
-            let bp = (150 * attacker_current_hp / attacker_max_hp).max(1);
-            modifiers.push(ModifierBreakdown::new("HP-based base power", 0));
-            bp
-        }
-        "Flail" | "Reversal" => {
-            let p = 48 * attacker_current_hp / attacker_max_hp;
-            let bp = if p <= 1 {
-                200
-            } else if p <= 4 {
-                150
-            } else if p <= 9 {
-                100
-            } else if p <= 16 {
-                80
-            } else if p <= 32 {
-                40
-            } else {
-                20
-            };
-            modifiers.push(ModifierBreakdown::new("HP-based base power", 0));
-            bp
-        }
-        "Crush Grip" | "Wring Out" => {
-            let hp_ratio =
-                (defender_current_hp as i64 * MODIFIER_DENOMINATOR as i64) / defender_max_hp as i64;
-            let rounded = poke_round_ratio(120 * 100 * hp_ratio, MODIFIER_DENOMINATOR as i64);
-            let bp = (rounded / 100).max(1) as u16;
-            modifiers.push(ModifierBreakdown::new("HP-ratio base power", 0));
-            bp
-        }
-        "Hard Press" => {
-            let hp_ratio =
-                (defender_current_hp as i64 * MODIFIER_DENOMINATOR as i64) / defender_max_hp as i64;
-            let rounded = poke_round_ratio(100 * 100 * hp_ratio, MODIFIER_DENOMINATOR as i64);
-            let bp = (rounded / 100).max(1) as u16;
-            modifiers.push(ModifierBreakdown::new("HP-ratio base power", 0));
-            bp
-        }
-        "Stored Power" | "Power Trip" => {
-            let bp = 20 + 20 * count_positive_boosts(attacker.boosts);
-            modifiers.push(ModifierBreakdown::new("boost-count base power", 0));
-            bp
-        }
-        "Punishment" => {
-            let bp = (60 + 20 * count_positive_boosts(defender.boosts)).min(200);
-            modifiers.push(ModifierBreakdown::new("target boost-count base power", 0));
-            bp
-        }
-        "Acrobatics" => {
-            let bp = if matches!(attacker.item, Item::None | Item::FlyingGem) {
-                110
-            } else {
-                move_.base_power
-            };
-            if bp != move_.base_power {
-                modifiers.push(ModifierBreakdown::new("Acrobatics base power", MOD_DOUBLE));
-            }
-            bp
-        }
-        "Hex" | "Infernal Parade" => {
-            let bp = if defender.status != StatusCondition::Healthy {
-                move_.base_power * 2
-            } else {
-                move_.base_power
-            };
-            if bp != move_.base_power {
-                modifiers.push(ModifierBreakdown::new("status base power", MOD_DOUBLE));
-            }
-            bp
-        }
-        "Smelling Salts" => {
-            let bp = if defender.status == StatusCondition::Paralyzed {
-                move_.base_power * 2
-            } else {
-                move_.base_power
-            };
-            if bp != move_.base_power {
-                modifiers.push(ModifierBreakdown::new(
-                    "Smelling Salts base power",
-                    MOD_DOUBLE,
-                ));
-            }
-            bp
-        }
-        "Wake-Up Slap" => {
-            let bp = if defender.status == StatusCondition::Asleep {
-                move_.base_power * 2
-            } else {
-                move_.base_power
-            };
-            if bp != move_.base_power {
-                modifiers.push(ModifierBreakdown::new(
-                    "Wake-Up Slap base power",
-                    MOD_DOUBLE,
-                ));
-            }
-            bp
-        }
-        "Weather Ball"
-            if field.weather != Weather::None && field.weather != Weather::StrongWinds =>
-        {
-            modifiers.push(ModifierBreakdown::new(
-                "Weather Ball base power",
-                MOD_DOUBLE,
-            ));
-            move_.base_power * 2
-        }
-        "Terrain Pulse" if field.terrain != crate::types::Terrain::None => {
-            modifiers.push(ModifierBreakdown::new(
-                "Terrain Pulse base power",
-                MOD_DOUBLE,
-            ));
-            move_.base_power * 2
-        }
-        "Rising Voltage"
-            if field.terrain == crate::types::Terrain::Electric && is_grounded(defender, field) =>
-        {
-            modifiers.push(ModifierBreakdown::new(
-                "Rising Voltage base power",
-                MOD_DOUBLE,
-            ));
-            move_.base_power * 2
-        }
-        "Tera Blast" if move_.type_ == PokemonType::Stellar => {
-            modifiers.push(ModifierBreakdown::new("Stellar Tera Blast base power", 0));
-            100
-        }
-        "Fling" => {
-            if !can_fling(attacker.item, &attacker.name, defender.ability) {
-                return Ok(0);
-            }
-            let bp = fling_power(attacker.item).unwrap_or(10);
-            modifiers.push(ModifierBreakdown::new("Fling base power", 0));
-            bp
-        }
-        "Natural Gift" => {
-            if let Some((_type, power)) = natural_gift(attacker.item) {
-                modifiers.push(ModifierBreakdown::new("Natural Gift base power", 0));
-                power
-            } else {
-                0
-            }
-        }
-        "Triple Kick" | "Triple Axel" => {
-            move_.base_power * move_.current_triple_hit.unwrap_or(1) as u16
-        }
-        "Last Respects" | "Rage Fist" => {
-            let bp = move_.base_power * (move_.times_affected as u16 + 1);
-            if move_.times_affected > 0 {
-                modifiers.push(ModifierBreakdown::new("times-affected base power", 0));
-            }
-            bp
-        }
-        _ if move_.is_double_power
-            && !matches!(
-                move_.name.as_str(),
-                "Retaliate" | "Fusion Bolt" | "Fusion Flare" | "Lash Out"
-            ) =>
-        {
-            modifiers.push(ModifierBreakdown::new("double-power move flag", MOD_DOUBLE));
-            move_.base_power * 2
-        }
-        _ => move_.base_power,
-    };
-    Ok(bp)
-}
-
-fn calc_bp_mods(
-    move_: &Move,
-    attacker: &Pokemon,
-    defender: &Pokemon,
-    field: &Field,
-    base_power: u16,
-    ate_ize_boosted: bool,
-    attacker_moves_first: bool,
-    defender_current_hp: u16,
-    defender_max_hp: u16,
-    modifiers: &mut Vec<ModifierBreakdown>,
-) -> Vec<i32> {
-    let mut mods = Vec::new();
-
-    if ate_ize_boosted {
-        push_mod(&mut mods, modifiers, "type-changing ability boost", MOD_1_2);
-    }
-
-    if !ate_ize_boosted
-        && ((attacker.ability == Ability::Reckless && (move_.has_recoil || move_.has_crash))
-            || (attacker.ability == Ability::IronFist && move_.is_punch))
-    {
-        push_mod(&mut mods, modifiers, "base power ability 1.2", MOD_1_2);
-    }
-
-    if field.battery && move_.category == Category::Special {
-        push_mod(&mut mods, modifiers, "Battery", MOD_1_3);
-    }
-    if field.power_spot {
-        push_mod(&mut mods, modifiers, "Power Spot", MOD_1_3);
-    }
-    if field.steely_spirit && move_.type_ == PokemonType::Steel {
-        push_mod(&mut mods, modifiers, "Ally Steely Spirit", MOD_1_5);
-    }
-    if attacker.ability == Ability::FairyAura && move_.type_ == PokemonType::Fairy {
-        push_mod(&mut mods, modifiers, "Fairy Aura", MOD_1_33);
-    }
-    if attacker.ability == Ability::Rivalry {
-        match attacker.rivalry_target {
-            RivalryTarget::SameGender => {
-                push_mod(&mut mods, modifiers, "Rivalry same gender", 0x1400)
-            }
-            RivalryTarget::OppositeGender => {
-                push_mod(&mut mods, modifiers, "Rivalry opposite gender", 0x0c00)
-            }
-            RivalryTarget::Unspecified => {}
-        }
-    }
-
-    if (attacker.ability == Ability::SheerForce && move_.has_secondary_effect)
-        || (attacker.ability == Ability::SandForce
-            && field.weather == Weather::Sand
-            && matches!(
-                move_.type_,
-                PokemonType::Rock | PokemonType::Ground | PokemonType::Steel
-            ))
-        || (attacker.ability == Ability::Analytic && !attacker_moves_first)
-        || (attacker.ability == Ability::ToughClaws && makes_effective_contact(attacker, move_))
-        || (attacker.ability == Ability::PunkRock && move_.is_sound)
-    {
-        push_mod(&mut mods, modifiers, "base power ability 1.3", MOD_1_3);
-    }
-
-    let temp_bp = apply_mod(base_power as i32, chain_mods(&mods));
-    if (attacker.ability == Ability::Technician && temp_bp <= 60)
-        || (attacker.ability == Ability::MegaLauncher && move_.is_pulse)
-        || (attacker.ability == Ability::StrongJaw && move_.is_bite)
-        || (attacker.ability == Ability::SteelySpirit && move_.type_ == PokemonType::Steel)
-    {
-        push_mod(&mut mods, modifiers, "base power ability 1.5", MOD_1_5);
-    }
-
-    if (attacker.item == Item::MuscleBand && move_.category == Category::Physical)
-        || (attacker.item == Item::WiseGlasses && move_.category == Category::Special)
-    {
-        push_mod(&mut mods, modifiers, "1.1x item", MOD_1_1);
-    } else if item_boost_type(attacker.item) == Some(move_.type_) {
-        push_mod(&mut mods, modifiers, "type item", MOD_1_2);
-    } else if gem_type(attacker.item) == Some(move_.type_) && is_gem(attacker.item) {
-        push_mod(&mut mods, modifiers, "gem", MOD_1_3);
-    }
-
-    if field.helping_hand {
-        push_mod(&mut mods, modifiers, "Helping Hand", MOD_1_5);
-    }
-    if (field.charge
-        || (matches!(
-            attacker.ability,
-            Ability::Electromorphosis | Ability::WindPower
-        ) && attacker.ability_on))
-        && move_.type_ == PokemonType::Electric
-    {
-        push_mod(&mut mods, modifiers, "Charge", MOD_DOUBLE);
-    }
-    if matches!(move_.name.as_str(), "Solar Beam" | "Solar Blade")
-        && !matches!(
-            field.weather,
-            Weather::None | Weather::Sun | Weather::HarshSun | Weather::StrongWinds
-        )
-        && attacker.item != Item::UtilityUmbrella
-        && attacker.ability != Ability::MegaSol
-    {
-        push_mod(&mut mods, modifiers, "bad-weather Solar move", MOD_HALF);
-    }
-
-    if is_grounded(attacker, field) {
-        let terrain_modifier = MOD_1_3;
-        if field.terrain == crate::types::Terrain::Electric && move_.type_ == PokemonType::Electric
-        {
-            push_mod(&mut mods, modifiers, "Electric Terrain", terrain_modifier);
-        } else if field.terrain == crate::types::Terrain::Grassy
-            && move_.type_ == PokemonType::Grass
-        {
-            push_mod(&mut mods, modifiers, "Grassy Terrain", terrain_modifier);
-        } else if field.terrain == crate::types::Terrain::Psychic
-            && move_.type_ == PokemonType::Psychic
-        {
-            push_mod(&mut mods, modifiers, "Psychic Terrain", terrain_modifier);
-        }
-    }
-    if is_grounded(defender, field) {
-        if (field.terrain == crate::types::Terrain::Misty && move_.type_ == PokemonType::Dragon)
-            || (field.terrain == crate::types::Terrain::Grassy
-                && matches!(move_.name.as_str(), "Earthquake" | "Bulldoze"))
-        {
-            push_mod(&mut mods, modifiers, "defensive terrain", MOD_HALF);
-        }
-    }
-
-    if matches!(
-        attacker.status,
-        StatusCondition::Burned
-            | StatusCondition::Paralyzed
-            | StatusCondition::Poisoned
-            | StatusCondition::BadlyPoisoned
-    ) && move_.name == "Facade"
-    {
-        push_mod(&mut mods, modifiers, "Facade", MOD_DOUBLE);
-    }
-    if defender_current_hp <= defender_max_hp / 2 && move_.name == "Brine" {
-        push_mod(&mut mods, modifiers, "Brine", MOD_DOUBLE);
-    }
-    if (matches!(move_.name.as_str(), "Venoshock" | "Barb Barrage")
-        && matches!(
-            defender.status,
-            StatusCondition::Poisoned | StatusCondition::BadlyPoisoned
-        ))
-        || (matches!(
-            move_.name.as_str(),
-            "Retaliate" | "Fusion Bolt" | "Fusion Flare" | "Lash Out"
-        ) && move_.is_double_power)
-    {
-        push_mod(&mut mods, modifiers, "conditional double power", MOD_DOUBLE);
-    }
-    if move_.name == "Knock Off" && !cant_remove_item(defender.item, &defender.name) {
-        push_mod(&mut mods, modifiers, "Knock Off", MOD_1_5);
-    } else if field.terrain == crate::types::Terrain::Electric && move_.name == "Psyblade" {
-        push_mod(&mut mods, modifiers, "Psyblade", MOD_1_5);
-    } else if (move_.name == "Misty Explosion"
-        && field.terrain == crate::types::Terrain::Misty
-        && is_grounded(attacker, field))
-        || (move_.name == "Grav Apple" && field.gravity)
-        || (move_.name == "Expanding Force"
-            && field.terrain == crate::types::Terrain::Psychic
-            && is_grounded(attacker, field))
-    {
-        push_mod(&mut mods, modifiers, "field base power boost", MOD_1_5);
-    }
-
-    if attacker.supreme_overlord_allies > 0 && attacker.ability == Ability::SupremeOverlord {
-        let table = [MOD_1_1_ALT, MOD_1_2, MOD_1_3, 0x1666, MOD_1_5];
-        let idx = attacker.supreme_overlord_allies.min(5) as usize - 1;
-        push_mod(&mut mods, modifiers, "Supreme Overlord", table[idx]);
-    }
-    if attacker.item == Item::PunchingGlove && move_.is_punch {
-        push_mod(&mut mods, modifiers, "Punching Glove", MOD_1_1_ALT);
-    }
-    for &modifier in &attacker.custom_bp_mods {
-        push_mod(&mut mods, modifiers, "custom BP modifier", modifier);
-    }
-
-    mods
-}
-
-fn calc_attack_mods(
-    move_: &Move,
-    attacker: &Pokemon,
-    attacker_highest_stat: Stat,
-    def_ability: Ability,
-    field: &Field,
-    modifiers: &mut Vec<ModifierBreakdown>,
-) -> Vec<i32> {
-    let mut mods = Vec::new();
-    if field.tablets_of_ruin
-        && move_.category == Category::Physical
-        && attacker.ability != Ability::TabletsOfRuin
-    {
-        push_mod(&mut mods, modifiers, "Tablets of Ruin", MOD_THREE_QUARTERS);
-    } else if field.vessel_of_ruin
-        && move_.category == Category::Special
-        && attacker.ability != Ability::VesselOfRuin
-    {
-        push_mod(&mut mods, modifiers, "Vessel of Ruin", MOD_THREE_QUARTERS);
-    }
-    if (attacker.ability == Ability::Defeatist && is_half_hp(attacker))
-        || (attacker.ability == Ability::None && false)
-    {
-        push_mod(&mut mods, modifiers, "attack ability 0.5", MOD_HALF);
-    }
-    if ((attacker.ability == Ability::FlowerGift && field.weather.is_sun())
-        || field.flower_gift_attack)
-        && move_.category == Category::Physical
-        && attacker.item != Item::UtilityUmbrella
-    {
-        push_mod(&mut mods, modifiers, "Flower Gift attack", MOD_1_5);
-    }
-
-    if (attacker.ability == Ability::Guts
-        && attacker.status != StatusCondition::Healthy
-        && move_.category == Category::Physical)
-        || (attacker.ability == Ability::FlareBoost
-            && attacker.status == StatusCondition::Burned
-            && move_.category == Category::Special)
-        || (attacker.ability == Ability::Overgrow
-            && is_third_hp(attacker)
-            && move_.type_ == PokemonType::Grass)
-        || (attacker.ability == Ability::Blaze
-            && is_third_hp(attacker)
-            && move_.type_ == PokemonType::Fire)
-        || (attacker.ability == Ability::Torrent
-            && is_third_hp(attacker)
-            && move_.type_ == PokemonType::Water)
-        || (attacker.ability == Ability::Swarm
-            && is_third_hp(attacker)
-            && move_.type_ == PokemonType::Bug)
-        || (attacker.ability == Ability::DragonMaw && move_.type_ == PokemonType::Dragon)
-        || (attacker.ability == Ability::FlashFire
-            && attacker.ability_on
-            && move_.type_ == PokemonType::Fire)
-        || (attacker.ability == Ability::Steelworker && move_.type_ == PokemonType::Steel)
-        || (matches!(attacker.ability, Ability::Plus | Ability::Minus) && attacker.ability_on)
-        || (attacker.ability == Ability::Sharpness && move_.is_slice)
-        || (attacker.ability == Ability::RockyPayload && move_.type_ == PokemonType::Rock)
-    {
-        push_mod(&mut mods, modifiers, "attack ability 1.5", MOD_1_5);
-    } else if attacker.ability == Ability::SolarPower
-        && field.weather.is_sun()
-        && move_.category == Category::Special
-        && attacker.item != Item::UtilityUmbrella
-    {
-        push_mod(&mut mods, modifiers, "Solar Power", MOD_1_5);
-    } else if paradox_offense_boosts(attacker, attacker_highest_stat, move_) {
-        push_mod(&mut mods, modifiers, "Paradox ability attack", MOD_1_3);
-    } else if attacker.ability == Ability::Transistor && move_.type_ == PokemonType::Electric {
-        push_mod(&mut mods, modifiers, "Transistor", MOD_1_3);
-    } else if (attacker.ability == Ability::OrichalcumPulse
-        && field.weather == Weather::Sun
-        && move_.category == Category::Physical
-        && attacker.item != Item::UtilityUmbrella)
-        || (attacker.ability == Ability::HadronEngine
-            && field.terrain == crate::types::Terrain::Electric
-            && move_.category == Category::Special)
-    {
-        push_mod(&mut mods, modifiers, "box legend attack", MOD_1_33);
-    }
-
-    if (attacker.item == Item::LightBall
-        && matches!(attacker.name.as_str(), "Pikachu" | "Pikachu-Gmax"))
-        || (attacker.ability == Ability::WaterBubble && move_.type_ == PokemonType::Water)
-        || (matches!(attacker.ability, Ability::HugePower | Ability::PurePower)
-            && move_.category == Category::Physical)
-        || (attacker.ability == Ability::Stakeout && attacker.ability_on)
-    {
-        push_mod(&mut mods, modifiers, "attack/item 2.0", MOD_DOUBLE);
-    }
-
-    if (def_ability == Ability::ThickFat
-        && matches!(move_.type_, PokemonType::Fire | PokemonType::Ice))
-        || (def_ability == Ability::WaterBubble && move_.type_ == PokemonType::Fire)
-        || (def_ability == Ability::PurifyingSalt && move_.type_ == PokemonType::Ghost)
-        || (def_ability == Ability::Heatproof && move_.type_ == PokemonType::Fire)
-    {
-        push_mod(&mut mods, modifiers, "defensive attack reduction", MOD_HALF);
-    }
-
-    if (attacker.item == Item::ChoiceBand && move_.category == Category::Physical)
-        || (attacker.item == Item::ChoiceSpecs && move_.category == Category::Special)
-    {
-        push_mod(&mut mods, modifiers, "Choice item", MOD_1_5);
-    }
-    for &modifier in &attacker.custom_attack_mods {
-        push_mod(&mut mods, modifiers, "custom attack modifier", modifier);
-    }
-
-    mods
 }
 
 fn calc_defense_mods(
@@ -2307,13 +2011,6 @@ fn calc_defense_mods(
         push_mod(&mut mods, modifiers, "custom defense modifier", modifier);
     }
     mods
-}
-
-fn paradox_offense_boosts(attacker: &Pokemon, attacker_highest_stat: Stat, move_: &Move) -> bool {
-    attacker.paradox_ability_boost
-        && ((attacker_highest_stat == Stat::Attack && move_.category == Category::Physical)
-            || (attacker_highest_stat == Stat::SpecialAttack
-                && move_.category == Category::Special))
 }
 
 fn stab_modifier(
@@ -2378,125 +2075,6 @@ fn stab_modifier(
     }
 }
 
-fn calc_final_mods(
-    move_: &Move,
-    attacker: &Pokemon,
-    defender: &Pokemon,
-    def_ability: Ability,
-    field: &Field,
-    is_critical: bool,
-    type_effectiveness: f32,
-    defender_current_hp: u16,
-    defender_max_hp: u16,
-    modifiers: &mut Vec<ModifierBreakdown>,
-) -> Vec<i32> {
-    let mut mods = Vec::new();
-    let ignores_screens = move_.ignores_screens || attacker.ability == Ability::Infiltrator;
-    if field.defender_side.aurora_veil && !is_critical && !ignores_screens {
-        let modifier = if field.format == Format::Singles {
-            MOD_HALF
-        } else {
-            MOD_0_67_DOUBLES_SCREEN
-        };
-        push_mod(&mut mods, modifiers, "Aurora Veil", modifier);
-    } else if field.defender_side.reflect
-        && move_.category == Category::Physical
-        && !is_critical
-        && !ignores_screens
-    {
-        let modifier = if field.format == Format::Singles {
-            MOD_HALF
-        } else {
-            MOD_0_67_DOUBLES_SCREEN
-        };
-        push_mod(&mut mods, modifiers, "Reflect", modifier);
-    } else if field.defender_side.light_screen
-        && move_.category == Category::Special
-        && !is_critical
-        && !ignores_screens
-    {
-        let modifier = if field.format == Format::Singles {
-            MOD_HALF
-        } else {
-            MOD_0_67_DOUBLES_SCREEN
-        };
-        push_mod(&mut mods, modifiers, "Light Screen", modifier);
-    }
-
-    if attacker.ability == Ability::Neuroforce && type_effectiveness > 1.0 {
-        push_mod(&mut mods, modifiers, "Neuroforce", MOD_1_25);
-    }
-    if matches!(move_.name.as_str(), "Collision Course" | "Electro Drift")
-        && type_effectiveness > 1.0
-    {
-        push_mod(
-            &mut mods,
-            modifiers,
-            "super-effective signature move",
-            MOD_1_33,
-        );
-    }
-    if attacker.ability == Ability::Sniper && is_critical {
-        push_mod(&mut mods, modifiers, "Sniper", MOD_1_5);
-    }
-    if attacker.ability == Ability::TintedLens && type_effectiveness < 1.0 {
-        push_mod(&mut mods, modifiers, "Tinted Lens", MOD_DOUBLE);
-    }
-
-    if matches!(def_ability, Ability::Multiscale | Ability::ShadowShield)
-        && defender_current_hp == defender_max_hp
-    {
-        push_mod(&mut mods, modifiers, "Multiscale", MOD_HALF);
-    }
-    if def_ability == Ability::Fluffy && makes_effective_contact(attacker, move_) {
-        push_mod(&mut mods, modifiers, "Fluffy contact", MOD_HALF);
-    }
-    if def_ability == Ability::PunkRock && move_.is_sound {
-        push_mod(&mut mods, modifiers, "Punk Rock defense", MOD_HALF);
-    }
-    if def_ability == Ability::IceScales && move_.category == Category::Special {
-        push_mod(&mut mods, modifiers, "Ice Scales", MOD_HALF);
-    }
-    if field.defender_side.friend_guard {
-        push_mod(&mut mods, modifiers, "Friend Guard", MOD_THREE_QUARTERS);
-    }
-    if matches!(
-        def_ability,
-        Ability::SolidRock | Ability::Filter | Ability::PrismArmor
-    ) && type_effectiveness > 1.0
-    {
-        push_mod(
-            &mut mods,
-            modifiers,
-            "super-effective reducer",
-            MOD_THREE_QUARTERS,
-        );
-    }
-    if def_ability == Ability::Fluffy && move_.type_ == PokemonType::Fire {
-        push_mod(&mut mods, modifiers, "Fluffy fire", MOD_DOUBLE);
-    }
-    if attacker.item == Item::ExpertBelt && type_effectiveness > 1.0 {
-        push_mod(&mut mods, modifiers, "Expert Belt", MOD_1_2);
-    } else if attacker.item == Item::LifeOrb {
-        push_mod(&mut mods, modifiers, "Life Orb", MOD_LIFE_ORB);
-    }
-    if berry_resist_type(defender.item) == Some(move_.type_)
-        && (type_effectiveness > 1.0 || move_.type_ == PokemonType::Normal)
-        && !matches!(attacker.ability, Ability::Unnerve | Ability::AsOne)
-    {
-        let modifier = if def_ability == Ability::Ripen {
-            MODIFIER_DENOMINATOR / 4
-        } else {
-            MOD_HALF
-        };
-        push_mod(&mut mods, modifiers, "resist berry", modifier);
-    }
-    for &modifier in &attacker.custom_final_mods {
-        push_mod(&mut mods, modifiers, "custom final modifier", modifier);
-    }
-    mods
-}
-
 fn weather_damage_boost(
     move_: &Move,
     attacker_ability: Ability,
@@ -2526,7 +2104,7 @@ fn weather_damage_drop(
         && defender_item != Item::UtilityUmbrella
 }
 
-fn push_mod(
+pub(super) fn push_mod(
     mods: &mut Vec<i32>,
     breakdown: &mut Vec<ModifierBreakdown>,
     label: &'static str,
@@ -2536,21 +2114,21 @@ fn push_mod(
     breakdown.push(ModifierBreakdown::new(label, modifier));
 }
 
-fn is_half_hp(pokemon: &Pokemon) -> bool {
+pub(super) fn is_half_hp(pokemon: &Pokemon) -> bool {
     match (pokemon.current_hp, pokemon.max_hp_override) {
         (Some(cur), Some(max)) => cur <= max / 2,
         _ => false,
     }
 }
 
-fn is_third_hp(pokemon: &Pokemon) -> bool {
+pub(super) fn is_third_hp(pokemon: &Pokemon) -> bool {
     match (pokemon.current_hp, pokemon.max_hp_override) {
         (Some(cur), Some(max)) => cur <= max / 3,
         _ => false,
     }
 }
 
-fn count_positive_boosts(boosts: crate::types::Boosts) -> u16 {
+pub(super) fn count_positive_boosts(boosts: crate::types::Boosts) -> u16 {
     [
         boosts.attack,
         boosts.defense,
@@ -2564,7 +2142,7 @@ fn count_positive_boosts(boosts: crate::types::Boosts) -> u16 {
     .sum()
 }
 
-fn effective_weight(pokemon: &Pokemon) -> f32 {
+pub(super) fn effective_weight(pokemon: &Pokemon) -> f32 {
     let mut weight = pokemon.weight_kg;
     if pokemon.ability == Ability::HeavyMetal {
         weight *= 2.0;
@@ -2633,7 +2211,7 @@ fn speed_ability_active(pokemon: &Pokemon, field: &Field) -> bool {
     }
 }
 
-fn cant_remove_item(item: Item, species: &str) -> bool {
+pub(super) fn cant_remove_item(item: Item, species: &str) -> bool {
     if matches!(item, Item::None | Item::KlutzSuppressed) {
         return true;
     }
@@ -2646,7 +2224,7 @@ fn cant_remove_item(item: Item, species: &str) -> bool {
     false
 }
 
-fn is_grounded(pokemon: &Pokemon, field: &Field) -> bool {
+pub(super) fn is_grounded(pokemon: &Pokemon, field: &Field) -> bool {
     field.gravity
         || pokemon.item == Item::IronBall
         || (pokemon.ability != Ability::Levitate

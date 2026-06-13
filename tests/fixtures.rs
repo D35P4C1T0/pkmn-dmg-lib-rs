@@ -1490,6 +1490,38 @@ fn multi_hit_totals_preserve_js_per_hit_rolls() {
 }
 
 #[test]
+fn healing_items_are_counted_for_repeated_ko_odds() {
+    let attacker = stat_100_mon("Attacker", PokemonType::Fighting);
+    let mut defender = stat_100_mon("Defender", PokemonType::Normal);
+    defender.max_hp_override = Some(80);
+    defender.current_hp = Some(80);
+    defender.item = Item::SitrusBerry;
+    let seismic_toss = Move::new("Seismic Toss", 1, PokemonType::Fighting, Category::Physical);
+
+    let result = calc(attacker, defender, seismic_toss, Field::default());
+    assert_eq!(result.damage_rolls, vec![50]);
+    assert_eq!(result.ko_chance, Some(0.0));
+    assert_eq!(result.ko_chance_by_move_use, vec![0.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
+fn healing_items_can_trigger_between_multi_hit_hits() {
+    let attacker = stat_100_mon("Attacker", PokemonType::Fighting);
+    let mut defender = stat_100_mon("Defender", PokemonType::Normal);
+    defender.max_hp_override = Some(100);
+    defender.current_hp = Some(100);
+    defender.item = Item::SitrusBerry;
+    let mut seismic_toss = Move::new("Seismic Toss", 1, PokemonType::Fighting, Category::Physical);
+    seismic_toss.hits = 2;
+
+    let result = calc(attacker, defender, seismic_toss, Field::default());
+    assert_eq!(result.damage_rolls, vec![100]);
+    assert_eq!(result.percent_range, (100.0, 100.0));
+    assert_eq!(result.ko_chance, Some(0.0));
+    assert_eq!(result.ko_chance_by_move_use, vec![0.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
 fn parental_bond_second_hit_uses_half_final_modifier() {
     let mut attacker = stat_100_mon("Kangaskhan-Mega", PokemonType::Normal);
     attacker.ability = Ability::ParentalBond;

@@ -10,7 +10,7 @@ especially integer floors, Game Freak rounding, and modifier chaining.
 
 ## Status
 
-Estimated Champions parity: **about 89%** against the JavaScript calculator's
+Estimated Champions parity: **about 90%** against the JavaScript calculator's
 Champions-relevant behavior.
 
 The core damage path is in good shape: stat calculation, type effectiveness,
@@ -56,8 +56,15 @@ let result = calculate_damage(CalcInput {
 
 assert_eq!(result.damage_rolls.len(), 16);
 assert_eq!(result.hit_rolls.len(), 1);
+assert_eq!(result.ko_chance_by_move_use.len(), 4);
 # Ok::<(), damage_calc::CalcError>(())
 ```
+
+`result.ko_chance` is the chance to KO with this move use. For UI text such as
+`guaranteed 2HKO after Sitrus Berry recovery`, use
+`result.ko_chance_by_move_use`: it reports cumulative KO odds after 1, 2, 3,
+and 4 uses while modeling one consumed defender healing item after every hit.
+This includes mid-move recovery for multi-hit attacks.
 
 `Field::default()` assumes Doubles. Named Champions spread moves such as Rock
 Slide automatically receive the Doubles 0.75 spread modifier. To calculate a
@@ -143,6 +150,8 @@ Implemented and covered by tests:
   Weakness Policy
 - fixed and HP-dependent damage moves such as Super Fang, Endeavor, Final
   Gambit, Seismic Toss, and OHKO moves
+- recovery-aware KO odds for Sitrus, Oran, and modern pinch berries, including
+  recovery between hits of the same multi-hit move
 - counter-style damage moves (`Counter`, `Mirror Coat`, `Metal Burst`, and
   `Comeuppance`) when the caller supplies the countered damage rolls/category
 - multi-hit totals and per-hit rolls, including Triple Kick/Triple Axel hit
