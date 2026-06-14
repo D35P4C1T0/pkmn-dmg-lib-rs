@@ -641,6 +641,8 @@ fn ko_chances_after_move_uses(
                 &mut |outcome| {
                     let probability = state_probability * sequence_probability;
                     if let Some(next_state) = outcome {
+                        let next_state =
+                            apply_end_of_turn_item_recovery(next_state, defender_max_hp);
                         *next_states.entry(next_state).or_insert(0.0) += probability;
                     } else {
                         ko_this_use += probability;
@@ -742,6 +744,19 @@ fn visit_hit_sequence_outcomes(
 
 fn focus_sash_survives_hit(state: KoState, damage: u16, defender_max_hp: u16) -> bool {
     state.item == Item::FocusSash && state.hp == defender_max_hp && damage >= state.hp && damage > 0
+}
+
+fn apply_end_of_turn_item_recovery(state: KoState, defender_max_hp: u16) -> KoState {
+    if state.item != Item::Leftovers || state.hp == 0 || state.hp == defender_max_hp {
+        return state;
+    }
+    KoState {
+        hp: state
+            .hp
+            .saturating_add(defender_max_hp / 16)
+            .min(defender_max_hp),
+        item: state.item,
+    }
 }
 
 fn healing_item_suppressed(move_: &Move, attacker_ability: Ability) -> bool {

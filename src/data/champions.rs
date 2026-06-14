@@ -54,6 +54,7 @@ pub const CHAMPIONS_ITEMS: &[&str] = &[
     "Metal Coat",
     "Fairy Feather",
     "Focus Sash",
+    "Leftovers",
     "Mental Herb",
     "Shell Bell",
     "Cheri Berry",

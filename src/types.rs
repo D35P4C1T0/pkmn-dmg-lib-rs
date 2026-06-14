@@ -502,6 +502,7 @@ pub enum Item {
     HearthflameMask,
     IronBall,
     KlutzSuppressed,
+    Leftovers,
     LightBall,
     LifeOrb,
     MentalHerb,

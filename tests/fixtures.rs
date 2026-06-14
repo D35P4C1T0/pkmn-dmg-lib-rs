@@ -1555,6 +1555,20 @@ fn focus_sash_can_be_broken_by_later_multi_hit_hits() {
 }
 
 #[test]
+fn leftovers_recovery_is_counted_between_repeated_ko_odds() {
+    let attacker = stat_100_mon("Attacker", PokemonType::Fighting);
+    let mut defender = stat_100_mon("Defender", PokemonType::Normal);
+    defender.max_hp_override = Some(100);
+    defender.current_hp = Some(100);
+    defender.item = Item::Leftovers;
+    let seismic_toss = Move::new("Seismic Toss", 1, PokemonType::Fighting, Category::Physical);
+
+    let result = calc(attacker, defender, seismic_toss, Field::default());
+    assert_eq!(result.damage_rolls, vec![50]);
+    assert_eq!(result.ko_chance_by_move_use, vec![0.0, 0.0, 1.0, 1.0]);
+}
+
+#[test]
 fn parental_bond_second_hit_uses_half_final_modifier() {
     let mut attacker = stat_100_mon("Kangaskhan-Mega", PokemonType::Normal);
     attacker.ability = Ability::ParentalBond;
@@ -2113,6 +2127,7 @@ fn champions_item_json_names_align_with_typed_item_variants() {
         Item::MetalCoat,
         Item::FairyFeather,
         Item::FocusSash,
+        Item::Leftovers,
         Item::MentalHerb,
         Item::ShellBell,
         Item::CheriBerry,
