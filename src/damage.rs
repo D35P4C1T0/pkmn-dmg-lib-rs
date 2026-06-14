@@ -696,6 +696,20 @@ fn visit_hit_sequence_outcomes(
 
     for damage in &hit_rolls[hit_index] {
         let mut next_state = state;
+        if focus_sash_survives_hit(next_state, *damage, defender_max_hp) {
+            next_state.hp = 1;
+            next_state.item = Item::None;
+            visit_hit_sequence_outcomes(
+                hit_rolls,
+                hit_index + 1,
+                next_state,
+                defender_max_hp,
+                defender_ability,
+                healing_suppressed,
+                on_outcome,
+            );
+            continue;
+        }
         next_state.hp = next_state.hp.saturating_sub(*damage);
         if next_state.hp == 0 {
             on_outcome(None);
@@ -724,6 +738,10 @@ fn visit_hit_sequence_outcomes(
             on_outcome,
         );
     }
+}
+
+fn focus_sash_survives_hit(state: KoState, damage: u16, defender_max_hp: u16) -> bool {
+    state.item == Item::FocusSash && state.hp == defender_max_hp && damage >= state.hp && damage > 0
 }
 
 fn healing_item_suppressed(move_: &Move, attacker_ability: Ability) -> bool {

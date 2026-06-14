@@ -1522,6 +1522,39 @@ fn healing_items_can_trigger_between_multi_hit_hits() {
 }
 
 #[test]
+fn focus_sash_prevents_a_full_hp_ohko_once() {
+    let mut attacker = stat_100_mon("Attacker", PokemonType::Fighting);
+    attacker.level = 100;
+    let mut defender = stat_100_mon("Defender", PokemonType::Normal);
+    defender.max_hp_override = Some(100);
+    defender.current_hp = Some(100);
+    defender.item = Item::FocusSash;
+    let seismic_toss = Move::new("Seismic Toss", 1, PokemonType::Fighting, Category::Physical);
+
+    let result = calc(attacker, defender, seismic_toss, Field::default());
+    assert_eq!(result.damage_rolls, vec![100]);
+    assert_eq!(result.ko_chance, Some(0.0));
+    assert_eq!(result.ko_chance_by_move_use, vec![0.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
+fn focus_sash_can_be_broken_by_later_multi_hit_hits() {
+    let mut attacker = stat_100_mon("Attacker", PokemonType::Fighting);
+    attacker.level = 100;
+    let mut defender = stat_100_mon("Defender", PokemonType::Normal);
+    defender.max_hp_override = Some(100);
+    defender.current_hp = Some(100);
+    defender.item = Item::FocusSash;
+    let mut seismic_toss = Move::new("Seismic Toss", 1, PokemonType::Fighting, Category::Physical);
+    seismic_toss.hits = 2;
+
+    let result = calc(attacker, defender, seismic_toss, Field::default());
+    assert_eq!(result.damage_rolls, vec![200]);
+    assert_eq!(result.ko_chance, Some(1.0));
+    assert_eq!(result.ko_chance_by_move_use, vec![1.0, 1.0, 1.0, 1.0]);
+}
+
+#[test]
 fn parental_bond_second_hit_uses_half_final_modifier() {
     let mut attacker = stat_100_mon("Kangaskhan-Mega", PokemonType::Normal);
     attacker.ability = Ability::ParentalBond;
@@ -2079,6 +2112,7 @@ fn champions_item_json_names_align_with_typed_item_variants() {
         Item::BlackGlasses,
         Item::MetalCoat,
         Item::FairyFeather,
+        Item::FocusSash,
         Item::MentalHerb,
         Item::ShellBell,
         Item::CheriBerry,

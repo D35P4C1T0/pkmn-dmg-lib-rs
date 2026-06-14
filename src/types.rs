@@ -550,6 +550,7 @@ pub enum Item {
     SpellTag,
     TwistedSpoon,
     FairyFeather,
+    FocusSash,
     Venusaurite,
     CharizarditeX,
     CharizarditeY,
