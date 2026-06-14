@@ -983,6 +983,7 @@ pub struct Field {
     pub sword_of_ruin: bool,
     pub beads_of_ruin: bool,
     pub neutralizing_gas: bool,
+    pub defender_leech_seed: bool,
 }
 
 impl Default for Field {
@@ -1018,6 +1019,7 @@ impl Default for Field {
             sword_of_ruin: false,
             beads_of_ruin: false,
             neutralizing_gas: false,
+            defender_leech_seed: false,
         }
     }
 }

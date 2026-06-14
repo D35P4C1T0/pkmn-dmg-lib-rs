@@ -117,6 +117,7 @@ fn calculate_champions_damage(mut input: CalcInput) -> Result<DamageResult, Calc
     let mut debug = vec![format!("hits={hit_count}")];
     let mut attacker = input.attacker;
     let mut defender = input.defender;
+    let initial_defender_item = defender.item;
     let mut field = input.field;
 
     for hit_index in 0..hit_count {
@@ -164,8 +165,8 @@ fn calculate_champions_damage(mut input: CalcInput) -> Result<DamageResult, Calc
         &hit_rolls,
         defender_current_hp,
         defender_max_hp,
-        defender.item,
-        defender.ability,
+        initial_defender_item,
+        residual_effects(&defender, &field, defender_max_hp),
         healing_item_suppressed(&input.move_, attacker.ability),
         KO_CHANCE_MAX_USES,
     );
@@ -309,7 +310,7 @@ fn calculate_champions_single_hit(
             defender_max_hp,
             defender_current_hp,
             defender.item,
-            defender.ability,
+            residual_effects(&defender, &field, defender_max_hp),
             healing_item_suppressed(&move_, attacker.ability),
             modifiers,
             debug,
@@ -324,6 +325,7 @@ fn calculate_champions_single_hit(
         defender_current_hp,
         defender_max_hp,
         field.protect,
+        &field,
         modifiers.clone(),
         debug.clone(),
     ) {
@@ -549,7 +551,7 @@ fn calculate_champions_single_hit(
         defender_current_hp,
         defender_max_hp,
         defender.item,
-        defender.ability,
+        residual_effects(&defender, &field, defender_max_hp),
         healing_item_suppressed(&move_, attacker.ability),
         KO_CHANCE_MAX_USES,
     );
@@ -587,6 +589,7 @@ fn combine_hit_rolls(hit_rolls: &[Vec<u16>]) -> Vec<u16> {
 struct KoState {
     hp: u16,
     item: Item,
+    toxic_counter: u8,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -595,12 +598,22 @@ struct HealingItemRecovery {
     threshold: u16,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ResidualEffects {
+    defender_ability: Ability,
+    healing_or_damage: i16,
+    burn_damage: u16,
+    poison_damage: u16,
+    toxic: bool,
+    leech_seed_damage: u16,
+}
+
 fn ko_chances_after_move_uses(
     hit_rolls: &[Vec<u16>],
     defender_current_hp: u16,
     defender_max_hp: u16,
     defender_item: Item,
-    defender_ability: Ability,
+    residual: ResidualEffects,
     healing_suppressed: bool,
     max_uses: usize,
 ) -> Vec<f32> {
@@ -620,6 +633,7 @@ fn ko_chances_after_move_uses(
         KoState {
             hp: defender_current_hp,
             item: defender_item,
+            toxic_counter: if residual.toxic { 1 } else { 0 },
         },
         1.0f64,
     )]);
@@ -636,14 +650,18 @@ fn ko_chances_after_move_uses(
                 0,
                 state,
                 defender_max_hp,
-                defender_ability,
+                residual.defender_ability,
                 healing_suppressed,
                 &mut |outcome| {
                     let probability = state_probability * sequence_probability;
                     if let Some(next_state) = outcome {
-                        let next_state =
-                            apply_end_of_turn_item_recovery(next_state, defender_max_hp);
-                        *next_states.entry(next_state).or_insert(0.0) += probability;
+                        if let Some(next_state) =
+                            apply_end_of_turn_effects(next_state, defender_max_hp, residual)
+                        {
+                            *next_states.entry(next_state).or_insert(0.0) += probability;
+                        } else {
+                            ko_this_use += probability;
+                        }
                     } else {
                         ko_this_use += probability;
                     }
@@ -746,17 +764,161 @@ fn focus_sash_survives_hit(state: KoState, damage: u16, defender_max_hp: u16) ->
     state.item == Item::FocusSash && state.hp == defender_max_hp && damage >= state.hp && damage > 0
 }
 
-fn apply_end_of_turn_item_recovery(state: KoState, defender_max_hp: u16) -> KoState {
-    if state.item != Item::Leftovers || state.hp == 0 || state.hp == defender_max_hp {
-        return state;
+fn residual_effects(defender: &Pokemon, field: &Field, defender_max_hp: u16) -> ResidualEffects {
+    let mut healing_or_damage = 0i16;
+    let residual_sixteenth = defender_max_hp / 16;
+    let residual_eighth = defender_max_hp / 8;
+    let magic_guard = defender.ability == Ability::MagicGuard;
+
+    match field.weather {
+        Weather::Sun | Weather::HarshSun => {
+            if matches!(defender.ability, Ability::DrySkin | Ability::SolarPower) {
+                healing_or_damage -= residual_eighth as i16;
+            }
+        }
+        Weather::Rain | Weather::HeavyRain => {
+            if defender.ability == Ability::DrySkin {
+                healing_or_damage += residual_eighth as i16;
+            } else if defender.ability == Ability::RainDish {
+                healing_or_damage += residual_sixteenth as i16;
+            }
+        }
+        Weather::Sand => {
+            if !magic_guard
+                && !defender.has_type(PokemonType::Rock)
+                && !defender.has_type(PokemonType::Ground)
+                && !defender.has_type(PokemonType::Steel)
+                && !matches!(
+                    defender.ability,
+                    Ability::Overcoat | Ability::SandForce | Ability::SandRush | Ability::SandVeil
+                )
+            {
+                healing_or_damage -= residual_sixteenth as i16;
+            }
+        }
+        Weather::Hail => {
+            if defender.ability == Ability::IceBody {
+                healing_or_damage += residual_sixteenth as i16;
+            } else if !magic_guard
+                && !defender.has_type(PokemonType::Ice)
+                && !matches!(defender.ability, Ability::Overcoat | Ability::SnowCloak)
+            {
+                healing_or_damage -= residual_sixteenth as i16;
+            }
+        }
+        Weather::Snow => {
+            if defender.ability == Ability::IceBody {
+                healing_or_damage += residual_sixteenth as i16;
+            }
+        }
+        Weather::None | Weather::StrongWinds => {}
     }
-    KoState {
-        hp: state
+
+    if defender.item == Item::Leftovers {
+        healing_or_damage += residual_sixteenth as i16;
+    }
+
+    if field.terrain == crate::types::Terrain::Grassy && is_grounded(defender, field) {
+        healing_or_damage += residual_sixteenth as i16;
+    }
+
+    let mut burn_damage = 0;
+    let mut poison_damage = 0;
+    let mut toxic = false;
+    if !magic_guard {
+        match defender.status {
+            StatusCondition::Poisoned => {
+                if defender.ability == Ability::PoisonHeal {
+                    healing_or_damage += residual_eighth as i16;
+                } else {
+                    poison_damage = residual_eighth;
+                }
+            }
+            StatusCondition::BadlyPoisoned => {
+                if defender.ability == Ability::PoisonHeal {
+                    healing_or_damage += residual_eighth as i16;
+                } else {
+                    toxic = true;
+                }
+            }
+            StatusCondition::Burned => {
+                burn_damage = if defender.ability == Ability::Heatproof {
+                    defender_max_hp / 16 / 2
+                } else {
+                    defender_max_hp / 16
+                };
+            }
+            StatusCondition::Healthy
+            | StatusCondition::Paralyzed
+            | StatusCondition::Asleep
+            | StatusCondition::Drowsy
+            | StatusCondition::Frozen => {}
+        }
+    }
+
+    let leech_seed_damage =
+        if field.defender_leech_seed && !magic_guard && !defender.has_type(PokemonType::Grass) {
+            residual_eighth
+        } else {
+            0
+        };
+
+    ResidualEffects {
+        defender_ability: defender.ability,
+        healing_or_damage,
+        burn_damage,
+        poison_damage,
+        toxic,
+        leech_seed_damage,
+    }
+}
+
+fn apply_end_of_turn_effects(
+    mut state: KoState,
+    defender_max_hp: u16,
+    residual: ResidualEffects,
+) -> Option<KoState> {
+    if state.hp == 0 {
+        return None;
+    }
+
+    if residual.healing_or_damage > 0 {
+        state.hp = state
             .hp
-            .saturating_add(defender_max_hp / 16)
-            .min(defender_max_hp),
-        item: state.item,
+            .saturating_add(residual.healing_or_damage as u16)
+            .min(defender_max_hp);
+    } else if residual.healing_or_damage < 0 {
+        state.hp = state
+            .hp
+            .saturating_sub((-residual.healing_or_damage) as u16);
+        if state.hp == 0 {
+            return None;
+        }
     }
+
+    for damage in [
+        residual.poison_damage,
+        residual.burn_damage,
+        residual.leech_seed_damage,
+    ] {
+        state.hp = state.hp.saturating_sub(damage);
+        if state.hp == 0 {
+            return None;
+        }
+    }
+
+    if residual.toxic {
+        let toxic_counter = state.toxic_counter.max(1);
+        state.hp = state
+            .hp
+            .saturating_sub(defender_max_hp.saturating_mul(toxic_counter as u16) / 16);
+        if state.hp == 0 {
+            return None;
+        }
+        state.toxic_counter = toxic_counter.saturating_add(1);
+    }
+
+    Some(state)
 }
 
 fn healing_item_suppressed(move_: &Move, attacker_ability: Ability) -> bool {
@@ -1839,6 +2001,7 @@ fn set_damage_result(
     defender_current_hp: u16,
     defender_max_hp: u16,
     protect: bool,
+    field: &Field,
     modifiers: Vec<ModifierBreakdown>,
     debug: Vec<String>,
 ) -> Option<DamageResult> {
@@ -1847,7 +2010,7 @@ fn set_damage_result(
         defender_max_hp,
         defender_current_hp,
         defender.item,
-        defender.ability,
+        residual_effects(defender, field, defender_max_hp),
         healing_item_suppressed(move_, attacker.ability),
         modifiers.clone(),
         debug.clone(),
@@ -1882,7 +2045,7 @@ fn set_damage_result(
         defender_max_hp,
         defender_current_hp,
         defender.item,
-        defender.ability,
+        residual_effects(defender, field, defender_max_hp),
         healing_item_suppressed(move_, attacker.ability),
         modifiers,
         debug,
@@ -1894,7 +2057,7 @@ fn counter_damage_result(
     defender_max_hp: u16,
     defender_current_hp: u16,
     defender_item: Item,
-    defender_ability: Ability,
+    residual: ResidualEffects,
     healing_suppressed: bool,
     mut modifiers: Vec<ModifierBreakdown>,
     debug: Vec<String>,
@@ -1914,7 +2077,7 @@ fn counter_damage_result(
             defender_max_hp,
             defender_current_hp,
             defender_item,
-            defender_ability,
+            residual,
             healing_suppressed,
             modifiers,
             debug,
@@ -1943,7 +2106,7 @@ fn counter_damage_result(
         defender_current_hp,
         defender_max_hp,
         defender_item,
-        defender_ability,
+        residual,
         healing_suppressed,
         KO_CHANCE_MAX_USES,
     );
@@ -1967,7 +2130,7 @@ fn single_damage_result(
     defender_max_hp: u16,
     defender_current_hp: u16,
     defender_item: Item,
-    defender_ability: Ability,
+    residual: ResidualEffects,
     healing_suppressed: bool,
     modifiers: Vec<ModifierBreakdown>,
     debug: Vec<String>,
@@ -1979,7 +2142,7 @@ fn single_damage_result(
         defender_current_hp,
         defender_max_hp,
         defender_item,
-        defender_ability,
+        residual,
         healing_suppressed,
         KO_CHANCE_MAX_USES,
     );

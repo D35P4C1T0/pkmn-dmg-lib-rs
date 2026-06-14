@@ -1569,6 +1569,65 @@ fn leftovers_recovery_is_counted_between_repeated_ko_odds() {
 }
 
 #[test]
+fn burn_tick_is_counted_after_damage_for_ko_odds() {
+    let mut attacker = stat_100_mon("Attacker", PokemonType::Fighting);
+    attacker.level = 94;
+    let mut defender = stat_100_mon("Defender", PokemonType::Normal);
+    defender.max_hp_override = Some(100);
+    defender.current_hp = Some(100);
+    defender.status = StatusCondition::Burned;
+    let seismic_toss = Move::new("Seismic Toss", 1, PokemonType::Fighting, Category::Physical);
+
+    let result = calc(attacker, defender, seismic_toss, Field::default());
+    assert_eq!(result.damage_rolls, vec![94]);
+    assert_eq!(result.ko_chance, Some(1.0));
+}
+
+#[test]
+fn poison_and_bad_poison_ticks_are_counted_after_damage_for_ko_odds() {
+    let mut attacker = stat_100_mon("Attacker", PokemonType::Fighting);
+    attacker.level = 88;
+    let mut defender = stat_100_mon("Defender", PokemonType::Normal);
+    defender.max_hp_override = Some(100);
+    defender.current_hp = Some(100);
+    defender.status = StatusCondition::Poisoned;
+    let seismic_toss = Move::new("Seismic Toss", 1, PokemonType::Fighting, Category::Physical);
+
+    let poisoned = calc(
+        attacker.clone(),
+        defender.clone(),
+        seismic_toss.clone(),
+        Field::default(),
+    );
+    assert_eq!(poisoned.damage_rolls, vec![88]);
+    assert_eq!(poisoned.ko_chance, Some(1.0));
+
+    attacker.level = 94;
+    defender.status = StatusCondition::BadlyPoisoned;
+    let badly_poisoned = calc(attacker, defender, seismic_toss, Field::default());
+    assert_eq!(badly_poisoned.damage_rolls, vec![94]);
+    assert_eq!(badly_poisoned.ko_chance, Some(1.0));
+}
+
+#[test]
+fn leech_seed_tick_is_counted_after_damage_for_ko_odds() {
+    let mut attacker = stat_100_mon("Attacker", PokemonType::Fighting);
+    attacker.level = 88;
+    let mut defender = stat_100_mon("Defender", PokemonType::Normal);
+    defender.max_hp_override = Some(100);
+    defender.current_hp = Some(100);
+    let seismic_toss = Move::new("Seismic Toss", 1, PokemonType::Fighting, Category::Physical);
+    let field = Field {
+        defender_leech_seed: true,
+        ..Field::default()
+    };
+
+    let result = calc(attacker, defender, seismic_toss, field);
+    assert_eq!(result.damage_rolls, vec![88]);
+    assert_eq!(result.ko_chance, Some(1.0));
+}
+
+#[test]
 fn parental_bond_second_hit_uses_half_final_modifier() {
     let mut attacker = stat_100_mon("Kangaskhan-Mega", PokemonType::Normal);
     attacker.ability = Ability::ParentalBond;
