@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Normalize vendored champout JSON into a compact Rust-friendly dataset."""
+"""Normalize vendored champout JSON into compact Rust-friendly dataset."""
 
 from __future__ import annotations
 
@@ -10,7 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RAW = ROOT / "data" / "champions" / "champout" / "raw"
 OUT = ROOT / "data" / "champions" / "generated" / "champions-data.json"
-ROSTER = ROOT / "data" / "champions" / "regulation_m_a_pokemon.json"
+ROSTER_M_A = ROOT / "data" / "champions" / "regulation_m_a_pokemon.json"
+ROSTER_M_B_ADDITIONS = ROOT / "data" / "champions" / "regulation_m_b_additions.json"
 
 TYPE_BY_CODE = {
     "0": "Normal",
@@ -42,6 +43,16 @@ CATEGORY_BY_CODE = {
 
 def read_json(path: Path):
     return json.loads(path.read_text())
+
+
+def regulation_m_b_roster() -> list[str]:
+    additions = read_json(ROSTER_M_B_ADDITIONS)
+    return read_json(ROSTER_M_A) + additions["regular"] + additions["mega"]
+
+
+def regulation_m_b_additions() -> set[str]:
+    additions = read_json(ROSTER_M_B_ADDITIONS)
+    return set(additions["regular"]) | set(additions["mega"])
 
 
 def text_by_label(filename: str) -> dict[str, str]:
@@ -79,11 +90,11 @@ def category_name(code: str) -> str:
 
 
 def normalize_form_display(species: str, form: str) -> str:
-    if not form:
+    if not form or form == "Normal Form":
         return species
     if form.startswith("Mega "):
         return form
-    if form == "Alolan Form":
+    if form in {"Alola Form", "Alolan Form"}:
         return f"{species} (Alolan)"
     if form == "Galarian Form":
         return f"{species} (Galarian)"
@@ -146,24 +157,50 @@ def build_moves() -> dict[int, dict[str, object]]:
     return moves
 
 
-def build_species(abilities: dict[int, dict[str, object]], moves: dict[int, dict[str, object]]):
+def roster_match(display_name: str, species_name: str, roster: set[str]) -> str | None:
+    if display_name in roster:
+        return "displayName"
+    if species_name in roster:
+        return "species"
+    return None
+
+
+def build_species(
+    abilities: dict[int, dict[str, object]],
+    moves: dict[int, dict[str, object]],
+):
     species_names = text_by_label("monsname_syn.json")
     form_names = text_by_label("zkn_form_syn.json")
     learnsets = {
         row["id"]: [int(value) for value in row["waza"].split(",") if value]
         for row in read_json(RAW / "waza_learn.json")
     }
-    legal_roster = set(read_json(ROSTER))
-
+    legal_roster_m_a = set(read_json(ROSTER_M_A))
+    legal_roster_m_b = set(regulation_m_b_roster())
+    new_m_b_entries = regulation_m_b_additions()
     species = []
     for row in read_json(RAW / "personal.json"):
         species_name = species_names.get(row["ms_name_lbl"], row["ms_name_lbl"])
         form_name = form_names.get(row["ms_form_lbl"], "")
         display_name = normalize_form_display(species_name, form_name)
-        ability_ids = [int_field(row, key) for key in ("toku0", "toku1", "toku2")]
+        ability_ids = [
+            int_field(row, "toku0"),
+            int_field(row, "toku1"),
+            int_field(row, "toku2"),
+        ]
         move_ids = learnsets.get(row["id"], [])
-        is_roster_display = display_name in legal_roster
-        is_roster_species = species_name in legal_roster
+        regulation_m_a_match = None
+        if display_name not in new_m_b_entries:
+            regulation_m_a_match = roster_match(
+                display_name,
+                species_name,
+                legal_roster_m_a,
+            )
+        regulation_m_b_match = roster_match(
+            display_name,
+            species_name,
+            legal_roster_m_b,
+        )
         species.append(
             {
                 "id": row["id"],
@@ -172,12 +209,11 @@ def build_species(abilities: dict[int, dict[str, object]], moves: dict[int, dict
                 "name": species_name,
                 "formName": form_name,
                 "displayName": display_name,
-                "isRegulationMA": is_roster_display or is_roster_species,
-                "regulationMatch": "displayName"
-                if is_roster_display
-                else "species"
-                if is_roster_species
-                else None,
+                "isRegulationMA": regulation_m_a_match is not None,
+                "regulationMatch": regulation_m_a_match,
+                "regulationMAMatch": regulation_m_a_match,
+                "isRegulationMB": regulation_m_b_match is not None,
+                "regulationMBMatch": regulation_m_b_match,
                 "types": [
                     type_name(row["type1"]),
                     type_name(row["type2"]),
@@ -224,11 +260,13 @@ def main() -> None:
     payload = {
         "schemaVersion": 1,
         "source": "projectpokemon/champout",
-        "ruleset": "Pokemon Champions Regulation M-A",
+        "ruleset": "Pokemon Champions Regulation M-A/M-B",
         "counts": {
             "species": len(species),
             "regulationMAForms": sum(1 for entry in species if entry["isRegulationMA"]),
-            "regulationMARosterNames": len(read_json(ROSTER)),
+            "regulationMARosterNames": len(read_json(ROSTER_M_A)),
+            "regulationMBForms": sum(1 for entry in species if entry["isRegulationMB"]),
+            "regulationMBRosterNames": len(regulation_m_b_roster()),
             "moves": len(moves),
             "abilities": len(abilities),
         },

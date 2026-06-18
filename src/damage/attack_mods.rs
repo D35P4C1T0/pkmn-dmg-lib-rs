@@ -66,6 +66,7 @@ pub(super) fn calc_attack_mods(
         || (matches!(attacker.ability, Ability::Plus | Ability::Minus) && attacker.ability_on)
         || (attacker.ability == Ability::Sharpness && move_.is_slice)
         || (attacker.ability == Ability::RockyPayload && move_.type_ == PokemonType::Rock)
+        || (attacker.ability == Ability::FireMane && move_.type_ == PokemonType::Fire)
     {
         push_mod(&mut mods, modifiers, "attack ability 1.5", MOD_1_5);
     } else if attacker.ability == Ability::SolarPower

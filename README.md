@@ -82,14 +82,17 @@ fetch Pokemon, item, or ability lists.
 
 ```rust
 use damage_calc::data::champions::{
-    champions_ability, champions_item, regulation_m_a_pokemon, CHAMPIONS_ABILITIES,
-    CHAMPIONS_ITEMS, CHAMPIONS_SPECIES, REGULATION_M_A_POKEMON,
+    champions_ability, champions_item, regulation_m_a_pokemon, regulation_m_b_pokemon,
+    CHAMPIONS_ABILITIES, CHAMPIONS_ITEMS, CHAMPIONS_SPECIES, REGULATION_M_A_POKEMON,
+    REGULATION_M_B_POKEMON,
 };
 
 assert!(CHAMPIONS_ITEMS.contains(&"Light Ball"));
 assert!(REGULATION_M_A_POKEMON.contains(&"Hydrapple"));
+assert!(REGULATION_M_B_POKEMON.contains(&"Mega Raichu X"));
 assert_eq!(champions_item("Scope Lens"), Some("Scope Lens"));
 assert_eq!(regulation_m_a_pokemon("Venusaur"), Some("Venusaur"));
+assert_eq!(regulation_m_b_pokemon("Mega Raichu X"), Some("Mega Raichu X"));
 assert_eq!(champions_ability("Overgrow").unwrap().id, 65);
 
 // Lightweight full lists for menus and optimizer setup.

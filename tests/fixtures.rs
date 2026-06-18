@@ -147,6 +147,46 @@ fn type_item_ability_weather_and_terrain_modifiers_are_applied() {
 }
 
 #[test]
+fn fire_mane_boosts_fire_type_damage() {
+    let mut attacker = Pokemon::champions(
+        "Mega Pyroar",
+        [Some(PokemonType::Fire), Some(PokemonType::Normal)],
+        StatTable::new(86, 88, 92, 129, 86, 126),
+        StatTable::new(0, 0, 0, 0, 0, 0),
+        Nature::Modest,
+    );
+    attacker.ability = Ability::FireMane;
+    let defender = Pokemon::champions(
+        "Aegislash-Shield",
+        [Some(PokemonType::Steel), Some(PokemonType::Ghost)],
+        StatTable::new(60, 50, 140, 50, 140, 60),
+        StatTable::new(32, 0, 0, 0, 2, 0),
+        Nature::Hardy,
+    );
+    let mut move_ = Move::new("Heat Wave", 95, PokemonType::Fire, Category::Special);
+    move_.is_spread = true;
+
+    let boosted = calc(
+        attacker.clone(),
+        defender.clone(),
+        move_.clone(),
+        Field::default(),
+    );
+    attacker.ability = Ability::None;
+    let neutral = calc(attacker, defender, move_, Field::default());
+
+    assert_eq!(
+        boosted.damage_rolls,
+        vec![120, 122, 122, 126, 126, 128, 128, 132, 132, 134, 134, 138, 138, 140, 140, 144]
+    );
+    assert!(boosted.min_damage > neutral.min_damage);
+    assert!(boosted
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "attack ability 1.5"));
+}
+
+#[test]
 fn sun_fire_stab_super_effective_matches_fixture() {
     let attacker = stat_100_mon("Attacker", PokemonType::Fire);
     let defender = stat_100_mon("Defender", PokemonType::Grass);
@@ -2317,10 +2357,13 @@ fn normalized_champions_data_is_generated_from_champout() {
         serde_json::from_str(damage_calc::data::CHAMPIONS_DATA_JSON).expect("generated data JSON");
 
     assert_eq!(data["schemaVersion"], 1);
-    assert_eq!(data["counts"]["species"], 323);
+    assert_eq!(data["counts"]["species"], 361);
+    assert_eq!(data["counts"]["regulationMAForms"], 321);
     assert_eq!(data["counts"]["regulationMARosterNames"], 209);
-    assert_eq!(data["counts"]["moves"], 918);
-    assert_eq!(data["counts"]["abilities"], 194);
+    assert_eq!(data["counts"]["regulationMBForms"], 359);
+    assert_eq!(data["counts"]["regulationMBRosterNames"], 247);
+    assert_eq!(data["counts"]["moves"], 920);
+    assert_eq!(data["counts"]["abilities"], 202);
 
     let species = data["species"].as_array().expect("species array");
     let venusaur = species
@@ -2384,6 +2427,17 @@ fn public_champions_lists_match_vendored_json_sources() {
     let roster: Vec<String> =
         serde_json::from_str(damage_calc::data::champions::REGULATION_M_A_POKEMON_JSON)
             .expect("roster JSON");
+    let m_b_additions: serde_json::Value =
+        serde_json::from_str(damage_calc::data::champions::REGULATION_M_B_ADDITIONS_JSON)
+            .expect("Regulation M-B additions JSON");
+    let m_b_addition_count = m_b_additions["regular"]
+        .as_array()
+        .expect("regular M-B additions")
+        .len()
+        + m_b_additions["mega"]
+            .as_array()
+            .expect("mega M-B additions")
+            .len();
     let data: serde_json::Value =
         serde_json::from_str(damage_calc::data::CHAMPIONS_DATA_JSON).expect("generated data JSON");
 
@@ -2394,6 +2448,10 @@ fn public_champions_lists_match_vendored_json_sources() {
     assert_eq!(
         damage_calc::data::champions::REGULATION_M_A_POKEMON.len(),
         roster.len()
+    );
+    assert_eq!(
+        damage_calc::data::champions::REGULATION_M_B_POKEMON.len(),
+        roster.len() + m_b_addition_count
     );
     assert_eq!(
         damage_calc::data::champions::CHAMPIONS_SPECIES.len(),
@@ -2413,6 +2471,20 @@ fn public_champions_lists_match_vendored_json_sources() {
     assert_eq!(
         damage_calc::data::champions::regulation_m_a_pokemon("Hydrapple"),
         Some("Hydrapple")
+    );
+    assert_eq!(
+        damage_calc::data::champions::regulation_m_b_pokemon("Mega Raichu X"),
+        Some("Mega Raichu X")
+    );
+    assert!(
+        !damage_calc::data::champions::champions_species("Mega Raichu X")
+            .expect("Mega Raichu X")
+            .is_regulation_m_a
+    );
+    assert!(
+        damage_calc::data::champions::champions_species("Mega Raichu X")
+            .expect("Mega Raichu X")
+            .is_regulation_m_b
     );
     assert_eq!(
         damage_calc::data::champions::champions_species("Mega Venusaur")
