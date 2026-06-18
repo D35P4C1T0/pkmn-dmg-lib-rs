@@ -307,11 +307,13 @@ fn calculate_champions_single_hit(
         modifiers.push(ModifierBreakdown::new("Disguise", 0));
         return Ok(single_damage_result(
             (defender_max_hp / 8).max(1),
-            defender_max_hp,
-            defender_current_hp,
-            defender.item,
-            residual_effects(&defender, &field, defender_max_hp),
-            healing_item_suppressed(&move_, attacker.ability),
+            DamageResolutionContext {
+                defender_max_hp,
+                defender_current_hp,
+                defender_item: defender.item,
+                residual: residual_effects(&defender, &field, defender_max_hp),
+                healing_suppressed: healing_item_suppressed(&move_, attacker.ability),
+            },
             modifiers,
             debug,
         ));
@@ -606,6 +608,15 @@ struct ResidualEffects {
     poison_damage: u16,
     toxic: bool,
     leech_seed_damage: u16,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DamageResolutionContext {
+    defender_max_hp: u16,
+    defender_current_hp: u16,
+    defender_item: Item,
+    residual: ResidualEffects,
+    healing_suppressed: bool,
 }
 
 fn ko_chances_after_move_uses(
@@ -2005,16 +2016,15 @@ fn set_damage_result(
     modifiers: Vec<ModifierBreakdown>,
     debug: Vec<String>,
 ) -> Option<DamageResult> {
-    if let Some(result) = counter_damage_result(
-        move_,
+    let context = DamageResolutionContext {
         defender_max_hp,
         defender_current_hp,
-        defender.item,
-        residual_effects(defender, field, defender_max_hp),
-        healing_item_suppressed(move_, attacker.ability),
-        modifiers.clone(),
-        debug.clone(),
-    ) {
+        defender_item: defender.item,
+        residual: residual_effects(defender, field, defender_max_hp),
+        healing_suppressed: healing_item_suppressed(move_, attacker.ability),
+    };
+
+    if let Some(result) = counter_damage_result(move_, context, modifiers.clone(), debug.clone()) {
         return Some(result);
     }
     let damage = match move_.name.as_str() {
@@ -2040,25 +2050,12 @@ fn set_damage_result(
         }
         _ => return None,
     };
-    Some(single_damage_result(
-        damage,
-        defender_max_hp,
-        defender_current_hp,
-        defender.item,
-        residual_effects(defender, field, defender_max_hp),
-        healing_item_suppressed(move_, attacker.ability),
-        modifiers,
-        debug,
-    ))
+    Some(single_damage_result(damage, context, modifiers, debug))
 }
 
 fn counter_damage_result(
     move_: &Move,
-    defender_max_hp: u16,
-    defender_current_hp: u16,
-    defender_item: Item,
-    residual: ResidualEffects,
-    healing_suppressed: bool,
+    context: DamageResolutionContext,
     mut modifiers: Vec<ModifierBreakdown>,
     debug: Vec<String>,
 ) -> Option<DamageResult> {
@@ -2072,16 +2069,7 @@ fn counter_damage_result(
         _ => return None,
     };
     if multiplier == 0.0 {
-        return Some(single_damage_result(
-            0,
-            defender_max_hp,
-            defender_current_hp,
-            defender_item,
-            residual,
-            healing_suppressed,
-            modifiers,
-            debug,
-        ));
+        return Some(single_damage_result(0, context, modifiers, debug));
     }
     let mut damage_rolls = rolls
         .iter()
@@ -2097,17 +2085,17 @@ fn counter_damage_result(
     let min_damage = *damage_rolls.first().unwrap_or(&0);
     let max_damage = *damage_rolls.last().unwrap_or(&0);
     let percent_range = (
-        min_damage as f32 * 100.0 / defender_max_hp as f32,
-        max_damage as f32 * 100.0 / defender_max_hp as f32,
+        min_damage as f32 * 100.0 / context.defender_max_hp as f32,
+        max_damage as f32 * 100.0 / context.defender_max_hp as f32,
     );
     let hit_rolls = vec![damage_rolls.clone()];
     let ko_chance_by_move_use = ko_chances_after_move_uses(
         &hit_rolls,
-        defender_current_hp,
-        defender_max_hp,
-        defender_item,
-        residual,
-        healing_suppressed,
+        context.defender_current_hp,
+        context.defender_max_hp,
+        context.defender_item,
+        context.residual,
+        context.healing_suppressed,
         KO_CHANCE_MAX_USES,
     );
     let ko_chance = ko_chance_by_move_use.first().copied();
@@ -2127,23 +2115,19 @@ fn counter_damage_result(
 
 fn single_damage_result(
     damage: u16,
-    defender_max_hp: u16,
-    defender_current_hp: u16,
-    defender_item: Item,
-    residual: ResidualEffects,
-    healing_suppressed: bool,
+    context: DamageResolutionContext,
     modifiers: Vec<ModifierBreakdown>,
     debug: Vec<String>,
 ) -> DamageResult {
-    let percent = damage as f32 * 100.0 / defender_max_hp as f32;
+    let percent = damage as f32 * 100.0 / context.defender_max_hp as f32;
     let hit_rolls = vec![vec![damage]];
     let ko_chance_by_move_use = ko_chances_after_move_uses(
         &hit_rolls,
-        defender_current_hp,
-        defender_max_hp,
-        defender_item,
-        residual,
-        healing_suppressed,
+        context.defender_current_hp,
+        context.defender_max_hp,
+        context.defender_item,
+        context.residual,
+        context.healing_suppressed,
         KO_CHANCE_MAX_USES,
     );
     let ko_chance = ko_chance_by_move_use.first().copied();
@@ -2240,18 +2224,19 @@ fn stab_modifier(
             modifiers.push(ModifierBreakdown::new("Tera STAB", MOD_1_5));
             return MOD_1_5;
         }
-    } else if attacker.is_terastalized && attacker.tera_type == Some(PokemonType::Stellar) {
-        if move_.gets_stellar_boost {
-            if original_has_type {
-                modifiers.push(ModifierBreakdown::new(
-                    "Stellar original-type STAB",
-                    MOD_DOUBLE,
-                ));
-                return MOD_DOUBLE;
-            }
-            modifiers.push(ModifierBreakdown::new("Stellar boost", MOD_1_2));
-            return MOD_1_2;
+    } else if attacker.is_terastalized
+        && attacker.tera_type == Some(PokemonType::Stellar)
+        && move_.gets_stellar_boost
+    {
+        if original_has_type {
+            modifiers.push(ModifierBreakdown::new(
+                "Stellar original-type STAB",
+                MOD_DOUBLE,
+            ));
+            return MOD_DOUBLE;
         }
+        modifiers.push(ModifierBreakdown::new("Stellar boost", MOD_1_2));
+        return MOD_1_2;
     }
 
     let current_has_type = attacker.has_type(move_.type_);
@@ -2393,7 +2378,7 @@ fn final_speed(
     if speed > 65535 {
         speed %= 65536;
     }
-    speed.min(10000).max(0) as u16
+    speed.clamp(0, 10000) as u16
 }
 
 fn speed_ability_active(pokemon: &Pokemon, field: &Field) -> bool {

@@ -755,7 +755,7 @@ impl StatTable {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Boosts {
     pub attack: i8,
@@ -763,18 +763,6 @@ pub struct Boosts {
     pub special_attack: i8,
     pub special_defense: i8,
     pub speed: i8,
-}
-
-impl Default for Boosts {
-    fn default() -> Self {
-        Self {
-            attack: 0,
-            defense: 0,
-            special_attack: 0,
-            special_defense: 0,
-            speed: 0,
-        }
-    }
 }
 
 impl Boosts {

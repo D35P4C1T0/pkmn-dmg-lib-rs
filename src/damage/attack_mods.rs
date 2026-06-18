@@ -27,9 +27,7 @@ pub(super) fn calc_attack_mods(
     {
         push_mod(&mut mods, modifiers, "Vessel of Ruin", MOD_THREE_QUARTERS);
     }
-    if (attacker.ability == Ability::Defeatist && is_half_hp(attacker))
-        || (attacker.ability == Ability::None && false)
-    {
+    if attacker.ability == Ability::Defeatist && is_half_hp(attacker) {
         push_mod(&mut mods, modifiers, "attack ability 0.5", MOD_HALF);
     }
     if ((attacker.ability == Ability::FlowerGift && field.weather.is_sun())

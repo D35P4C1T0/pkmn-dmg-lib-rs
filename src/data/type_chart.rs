@@ -104,6 +104,10 @@ pub fn effectiveness(attack: PokemonType, defend: PokemonType) -> f32 {
     }
 }
 
+/// Calculates a move's combined type effectiveness against defender typing.
+///
+/// This keeps the flat flag list used by the public damage path and existing callers.
+#[allow(clippy::too_many_arguments)]
 pub fn move_effectiveness(
     move_name: &str,
     move_type: PokemonType,
@@ -122,20 +126,18 @@ pub fn move_effectiveness(
             continue;
         }
         seen_types.push(defend_type);
-        let single = if (foresight || scrappy)
+        let ignores_immunity = ((foresight || scrappy)
             && defend_type == PokemonType::Ghost
-            && matches!(move_type, PokemonType::Normal | PokemonType::Fighting)
-        {
-            1.0
-        } else if (gravity || iron_ball)
-            && defend_type == PokemonType::Flying
-            && move_type == PokemonType::Ground
-        {
+            && matches!(move_type, PokemonType::Normal | PokemonType::Fighting))
+            || ((gravity || iron_ball)
+                && defend_type == PokemonType::Flying
+                && move_type == PokemonType::Ground)
+            || (move_name == "Nihil Light" && defend_type == PokemonType::Fairy);
+
+        let single = if ignores_immunity {
             1.0
         } else if move_name == "Freeze-Dry" && defend_type == PokemonType::Water {
             2.0
-        } else if move_name == "Nihil Light" && defend_type == PokemonType::Fairy {
-            1.0
         } else {
             let mut value = effectiveness(move_type, defend_type);
             if ring_target && value == 0.0 {

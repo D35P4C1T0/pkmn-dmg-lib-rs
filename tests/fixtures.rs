@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+
 use damage_calc::{
     calculate_damage, calculate_hp, calculate_non_hp_stat, Ability, Boosts, CalcInput, Category,
     Field, Format, Item, Move, Nature, Pokemon, PokemonType, RivalryTarget, Ruleset,

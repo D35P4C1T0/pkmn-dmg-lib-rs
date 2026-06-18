@@ -131,13 +131,12 @@ pub(super) fn calc_bp_mods(
             push_mod(&mut mods, modifiers, "Psychic Terrain", terrain_modifier);
         }
     }
-    if is_grounded(defender, field) {
-        if (field.terrain == crate::types::Terrain::Misty && move_.type_ == PokemonType::Dragon)
+    if is_grounded(defender, field)
+        && ((field.terrain == crate::types::Terrain::Misty && move_.type_ == PokemonType::Dragon)
             || (field.terrain == crate::types::Terrain::Grassy
-                && matches!(move_.name.as_str(), "Earthquake" | "Bulldoze"))
-        {
-            push_mod(&mut mods, modifiers, "defensive terrain", MOD_HALF);
-        }
+                && matches!(move_.name.as_str(), "Earthquake" | "Bulldoze")))
+    {
+        push_mod(&mut mods, modifiers, "defensive terrain", MOD_HALF);
     }
 
     if matches!(
