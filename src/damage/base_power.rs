@@ -228,9 +228,10 @@ pub(super) fn calc_base_power(
             move_.base_power * move_.current_triple_hit.unwrap_or(1) as u16
         }
         "Last Respects" | "Rage Fist" => {
-            let bp = move_.base_power * (move_.times_affected as u16 + 1);
-            if move_.times_affected > 0 {
-                modifiers.push(ModifierBreakdown::new("times-affected base power", 0));
+            let effect = move_.effect_count();
+            let bp = move_.base_power * effect.base_power_multiplier();
+            if effect.is_active() {
+                modifiers.push(ModifierBreakdown::new(effect.label(), 0));
             }
             bp
         }

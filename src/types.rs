@@ -778,6 +778,92 @@ impl Boosts {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum EffectCount {
+    #[default]
+    Zero,
+    One,
+    Two,
+    Three,
+    Four,
+    Five,
+    Six,
+    Custom(u8),
+}
+
+impl EffectCount {
+    pub const UI_OPTIONS: [Self; 7] = [
+        Self::Zero,
+        Self::One,
+        Self::Two,
+        Self::Three,
+        Self::Four,
+        Self::Five,
+        Self::Six,
+    ];
+
+    pub const fn count(self) -> u8 {
+        match self {
+            Self::Zero => 0,
+            Self::One => 1,
+            Self::Two => 2,
+            Self::Three => 3,
+            Self::Four => 4,
+            Self::Five => 5,
+            Self::Six => 6,
+            Self::Custom(count) => count,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Zero => "0x effect",
+            Self::One => "1x effect",
+            Self::Two => "2x effect",
+            Self::Three => "3x effect",
+            Self::Four => "4x effect",
+            Self::Five => "5x effect",
+            Self::Six => "6x effect",
+            Self::Custom(_) => "custom effect count",
+        }
+    }
+
+    pub const fn is_active(self) -> bool {
+        self.count() > 0
+    }
+
+    pub const fn base_power_multiplier(self) -> u16 {
+        self.count() as u16 + 1
+    }
+
+    pub const fn supreme_overlord_index(self) -> Option<usize> {
+        let count = self.count();
+        if count == 0 {
+            None
+        } else if count >= 5 {
+            Some(4)
+        } else {
+            Some(count as usize - 1)
+        }
+    }
+}
+
+impl From<u8> for EffectCount {
+    fn from(count: u8) -> Self {
+        match count {
+            0 => Self::Zero,
+            1 => Self::One,
+            2 => Self::Two,
+            3 => Self::Three,
+            4 => Self::Four,
+            5 => Self::Five,
+            6 => Self::Six,
+            count => Self::Custom(count),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Pokemon {
@@ -847,6 +933,14 @@ impl Pokemon {
 
     pub fn has_type(&self, type_: PokemonType) -> bool {
         self.types.iter().flatten().any(|t| *t == type_)
+    }
+
+    pub fn supreme_overlord_effect(&self) -> EffectCount {
+        self.supreme_overlord_allies.into()
+    }
+
+    pub fn set_supreme_overlord_effect(&mut self, effect: EffectCount) {
+        self.supreme_overlord_allies = effect.count();
     }
 }
 
@@ -932,6 +1026,14 @@ impl Move {
             current_triple_hit: None,
             hits: 1,
         }
+    }
+
+    pub fn effect_count(&self) -> EffectCount {
+        self.times_affected.into()
+    }
+
+    pub fn set_effect_count(&mut self, effect: EffectCount) {
+        self.times_affected = effect.count();
     }
 }
 

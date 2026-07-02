@@ -2,7 +2,7 @@
 
 use damage_calc::{
     calculate_damage, calculate_hp, calculate_non_hp_stat, Ability, Boosts, CalcInput, Category,
-    Field, Format, Item, Move, Nature, Pokemon, PokemonType, RivalryTarget, Ruleset,
+    EffectCount, Field, Format, Item, Move, Nature, Pokemon, PokemonType, RivalryTarget, Ruleset,
     SideConditions, Stat, StatTable, StatusCondition, Terrain, Weather,
 };
 use std::collections::HashSet;
@@ -492,6 +492,104 @@ fn variable_base_power_moves_match_champions_formulas() {
         .applied_modifiers
         .iter()
         .any(|modifier| modifier.label == "double-power move flag"));
+}
+
+#[test]
+fn last_respects_uses_shared_effect_count_for_base_power() {
+    let attacker = stat_100_mon("Attacker", PokemonType::Ghost);
+    let defender = stat_100_mon("Defender", PokemonType::Fighting);
+
+    let mut last_respects = Move::new("Last Respects", 50, PokemonType::Ghost, Category::Physical);
+    last_respects.set_effect_count(EffectCount::Five);
+    let equivalent_300_bp = Move::new("Equivalent", 300, PokemonType::Ghost, Category::Physical);
+
+    let result = calc(
+        attacker.clone(),
+        defender.clone(),
+        last_respects,
+        Field::default(),
+    );
+    let equivalent = calc(attacker, defender, equivalent_300_bp, Field::default());
+
+    assert_eq!(result.damage_rolls, equivalent.damage_rolls);
+    assert!(result
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "5x effect"));
+}
+
+#[test]
+fn zero_effect_last_respects_keeps_printed_base_power() {
+    let attacker = stat_100_mon("Attacker", PokemonType::Ghost);
+    let defender = stat_100_mon("Defender", PokemonType::Fighting);
+
+    let last_respects = Move::new("Last Respects", 50, PokemonType::Ghost, Category::Physical);
+    let equivalent_50_bp = Move::new("Equivalent", 50, PokemonType::Ghost, Category::Physical);
+
+    let result = calc(
+        attacker.clone(),
+        defender.clone(),
+        last_respects,
+        Field::default(),
+    );
+    let equivalent = calc(attacker, defender, equivalent_50_bp, Field::default());
+
+    assert_eq!(result.damage_rolls, equivalent.damage_rolls);
+    assert!(!result
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label.ends_with("x effect")));
+}
+
+#[test]
+fn rage_fist_reuses_last_respects_effect_count_path() {
+    let attacker = stat_100_mon("Attacker", PokemonType::Ghost);
+    let defender = stat_100_mon("Defender", PokemonType::Fighting);
+
+    let mut rage_fist = Move::new("Rage Fist", 50, PokemonType::Ghost, Category::Physical);
+    rage_fist.set_effect_count(EffectCount::Six);
+    let equivalent_350_bp = Move::new("Equivalent", 350, PokemonType::Ghost, Category::Physical);
+
+    let result = calc(
+        attacker.clone(),
+        defender.clone(),
+        rage_fist,
+        Field::default(),
+    );
+    let equivalent = calc(attacker, defender, equivalent_350_bp, Field::default());
+
+    assert_eq!(result.damage_rolls, equivalent.damage_rolls);
+    assert!(result
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "6x effect"));
+}
+
+#[test]
+fn supreme_overlord_uses_effect_count_and_caps_at_five_allies() {
+    let defender = stat_100_mon("Defender", PokemonType::Fairy);
+    let iron_head = Move::new("Iron Head", 80, PokemonType::Steel, Category::Physical);
+
+    let mut five_down = stat_100_mon("Kingambit", PokemonType::Steel);
+    five_down.ability = Ability::SupremeOverlord;
+    five_down.set_supreme_overlord_effect(EffectCount::Five);
+
+    let mut six_down = five_down.clone();
+    six_down.set_supreme_overlord_effect(EffectCount::Six);
+
+    let five_result = calc(
+        five_down,
+        defender.clone(),
+        iron_head.clone(),
+        Field::default(),
+    );
+    let six_result = calc(six_down, defender, iron_head, Field::default());
+
+    assert_eq!(five_result.damage_rolls, six_result.damage_rolls);
+    assert!(six_result
+        .applied_modifiers
+        .iter()
+        .any(|modifier| modifier.label == "Supreme Overlord"));
 }
 
 #[test]

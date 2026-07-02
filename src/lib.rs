@@ -16,6 +16,7 @@ pub mod types;
 pub use damage::{calculate_damage, CalcInput, DamageResult, ModifierBreakdown};
 pub use stats::{calculate_hp, calculate_non_hp_stat, calculate_stats};
 pub use types::{
-    Ability, Boosts, CalcError, Category, Field, Format, Item, Move, Nature, Pokemon, PokemonType,
-    RivalryTarget, Ruleset, SideConditions, Stat, StatTable, StatusCondition, Terrain, Weather,
+    Ability, Boosts, CalcError, Category, EffectCount, Field, Format, Item, Move, Nature, Pokemon,
+    PokemonType, RivalryTarget, Ruleset, SideConditions, Stat, StatTable, StatusCondition, Terrain,
+    Weather,
 };

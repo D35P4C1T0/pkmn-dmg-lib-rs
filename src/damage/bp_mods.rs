@@ -179,10 +179,11 @@ pub(super) fn calc_bp_mods(
         push_mod(&mut mods, modifiers, "field base power boost", MOD_1_5);
     }
 
-    if attacker.supreme_overlord_allies > 0 && attacker.ability == Ability::SupremeOverlord {
+    if attacker.ability == Ability::SupremeOverlord {
         let table = [MOD_1_1_ALT, MOD_1_2, MOD_1_3, 0x1666, MOD_1_5];
-        let idx = attacker.supreme_overlord_allies.min(5) as usize - 1;
-        push_mod(&mut mods, modifiers, "Supreme Overlord", table[idx]);
+        if let Some(idx) = attacker.supreme_overlord_effect().supreme_overlord_index() {
+            push_mod(&mut mods, modifiers, "Supreme Overlord", table[idx]);
+        }
     }
     if attacker.item == Item::PunchingGlove && move_.is_punch {
         push_mod(&mut mods, modifiers, "Punching Glove", MOD_1_1_ALT);
